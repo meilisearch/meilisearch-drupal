@@ -1,0 +1,9 @@
+meilisearch_analytics.click:
+  path: '/meilisearch/events/click'
+  defaults:
+    _controller: '\Drupal\meilisearch_analytics\Controller\ClickTrackingController::record'
+  methods: [POST]
+  requirements:
+    _access: 'TRUE'
+  options:
+    _format: 'json'

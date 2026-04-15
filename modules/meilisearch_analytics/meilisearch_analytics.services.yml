@@ -1,0 +1,12 @@
+services:
+  meilisearch_analytics.service:
+    class: Drupal\meilisearch_analytics\Analytics\AnalyticsService
+    arguments:
+      - '@meilisearch.api'
+      - '@current_user'
+      - '@logger.channel.meilisearch'
+
+  meilisearch_analytics.query_subscriber:
+    class: Drupal\meilisearch_analytics\EventSubscriber\SearchMetadataSubscriber
+    tags:
+      - { name: event_subscriber }

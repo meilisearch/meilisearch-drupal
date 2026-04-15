@@ -1,0 +1,7 @@
+name: 'Meilisearch Analytics'
+type: module
+description: 'Tracks click and conversion events for Meilisearch searches.'
+core_version_requirement: ^9.3 || ^10 || ^11
+package: 'Search'
+dependencies:
+  - meilisearch:meilisearch
