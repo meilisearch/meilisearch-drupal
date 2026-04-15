@@ -1,0 +1,60 @@
+services:
+  logger.channel.meilisearch:
+    parent: logger.channel_base
+    arguments: ['meilisearch']
+
+  meilisearch.client_factory:
+    class: Drupal\meilisearch\Client\MeilisearchClientFactory
+
+  meilisearch.api:
+    class: Drupal\meilisearch\Api\MeilisearchApiService
+    arguments: ['@meilisearch.client_factory']
+    shared: false
+
+  meilisearch.document_converter:
+    class: Drupal\meilisearch\Converter\DocumentConverter
+
+  meilisearch.filter_builder:
+    class: Drupal\meilisearch\Filter\FilterBuilder
+    tags:
+      - { name: service_collector, tag: meilisearch.condition_parser, call: addConditionParser }
+
+  meilisearch.condition_parser.scalar:
+    class: Drupal\meilisearch\Filter\ScalarValueParser
+    tags:
+      - { name: meilisearch.condition_parser, priority: 10 }
+
+  meilisearch.condition_parser.boolean:
+    class: Drupal\meilisearch\Filter\BooleanValueParser
+    tags:
+      - { name: meilisearch.condition_parser, priority: 20 }
+
+  meilisearch.condition_parser.null:
+    class: Drupal\meilisearch\Filter\NullValueParser
+    tags:
+      - { name: meilisearch.condition_parser, priority: 15 }
+
+  meilisearch.condition_parser.between:
+    class: Drupal\meilisearch\Filter\BetweenOperatorParser
+    tags:
+      - { name: meilisearch.condition_parser, priority: 15 }
+
+  meilisearch.condition_parser.not_between:
+    class: Drupal\meilisearch\Filter\NotBetweenOperatorParser
+    tags:
+      - { name: meilisearch.condition_parser, priority: 15 }
+
+  meilisearch.condition_parser.in:
+    class: Drupal\meilisearch\Filter\InOperatorParser
+    tags:
+      - { name: meilisearch.condition_parser, priority: 15 }
+
+  meilisearch.condition_parser.not_in:
+    class: Drupal\meilisearch\Filter\NotInOperatorParser
+    tags:
+      - { name: meilisearch.condition_parser, priority: 15 }
+
+  meilisearch.condition_parser.geo:
+    class: Drupal\meilisearch\Filter\GeoFilterParser
+    tags:
+      - { name: meilisearch.condition_parser, priority: 25 }
