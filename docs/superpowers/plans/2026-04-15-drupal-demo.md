@@ -867,8 +867,6 @@ type: decimal
 settings:
   precision: 3
   scale: 1
-  min: 0
-  max: 5
 module: core
 locked: false
 cardinality: 1
@@ -1097,10 +1095,11 @@ translatable: true
 default_value: {  }
 default_value_callback: ''
 settings:
-  max_length: 1024
   case_sensitive: false
 field_type: string
 ```
+
+Note: `max_length` lives on the storage config only; string field instance schema does not include it.
 
 - [ ] **Step 2: Commit**
 
