@@ -343,6 +343,49 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
     ];
   }
 
+  /**
+   * {@inheritdoc}
+   */
+  public function indexItems(IndexInterface $index, array $items): array {
+    $documents = $this->documentConverter->convertToDocuments($items);
+    try {
+      $task = $this->api->addDocuments($index->id(), $documents);
+      $this->api->waitForTask((int) $task['taskUid']);
+    }
+    catch (MeilisearchApiException $e) {
+      $this->logger->error('Index items failed: @msg', ['@msg' => $e->getMessage()]);
+      throw new SearchApiException($e->getMessage(), $e->getCode(), $e);
+    }
+    return array_keys($items);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function deleteItems(IndexInterface $index, array $item_ids): void {
+    $ids = array_map(fn($id) => MeilisearchUtils::formatAsDocumentId($id), $item_ids);
+    try {
+      $task = $this->api->deleteDocuments($index->id(), $ids);
+      $this->api->waitForTask((int) $task['taskUid']);
+    }
+    catch (MeilisearchApiException $e) {
+      $this->logger->error('Delete items failed: @msg', ['@msg' => $e->getMessage()]);
+    }
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function deleteAllIndexItems(IndexInterface $index, $datasource_id = NULL): void {
+    try {
+      $task = $this->api->deleteAllDocuments($index->id());
+      $this->api->waitForTask((int) $task['taskUid']);
+    }
+    catch (MeilisearchApiException $e) {
+      $this->logger->error('Delete all items failed: @msg', ['@msg' => $e->getMessage()]);
+    }
+  }
+
   public function __sleep(): array {
     $properties = array_flip(parent::__sleep());
     unset($properties['api'], $properties['documentConverter'], $properties['filterBuilder'], $properties['logger']);
