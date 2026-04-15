@@ -386,6 +386,94 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
     }
   }
 
+  /**
+   * {@inheritdoc}
+   */
+  public function search(QueryInterface $query): void {
+    $results = $query->getResults();
+    $index = $query->getIndex();
+    $keys = (string) ($query->getOriginalKeys() ?? '');
+    $options = [];
+
+    // Pagination.
+    $queryOptions = $query->getOptions();
+    $options['offset'] = (int) ($queryOptions['offset'] ?? 0);
+    $options['limit'] = isset($queryOptions['limit']) && $queryOptions['limit'] > 0
+      ? (int) $queryOptions['limit']
+      : 20;
+
+    // Filter.
+    $filter = $this->filterBuilder->build($query->getConditionGroup(), $index);
+    if ($filter !== NULL) {
+      $options['filter'] = $filter;
+    }
+
+    // Sort.
+    $sorts = [];
+    foreach ($query->getSorts() as $field => $direction) {
+      if (in_array($field, ['search_api_relevance', 'search_api_random'], TRUE)) {
+        continue;
+      }
+      $sorts[] = $field . ':' . strtolower($direction);
+    }
+    if ($sorts) {
+      $options['sort'] = $sorts;
+    }
+
+    // Semantic / hybrid.
+    $mode = $this->configuration['search_mode'];
+    if ($mode !== 'keyword' && !empty($this->configuration['embedder'])) {
+      $ratio = $mode === 'semantic' ? 1.0 : (float) $this->configuration['semantic_ratio'];
+      $options['hybrid'] = [
+        'semanticRatio' => $ratio,
+        'embedder' => $this->configuration['embedder'],
+      ];
+    }
+
+    // Allow other modules to alter options (e.g., facets, highlighting).
+    $this->alterSearchOptions($options, $query);
+
+    try {
+      $data = $this->api->search($index->id(), $keys, $options);
+    }
+    catch (MeilisearchApiException $e) {
+      $this->logger->error('Search failed: @msg', ['@msg' => $e->getMessage()]);
+      throw new SearchApiException($e->getMessage(), $e->getCode(), $e);
+    }
+
+    $results->setResultCount($data->getEstimatedTotalHits());
+    foreach ($data->getHits() as $hit) {
+      if (!isset($hit['search_api_id'])) {
+        continue;
+      }
+      $item = $this->getFieldsHelper()->createItem($index, $hit['search_api_id']);
+      if (isset($hit['_formatted'])) {
+        $item->setExtraData('meilisearch_highlighted', $hit['_formatted']);
+      }
+      $results->addResultItem($item);
+    }
+
+    // Store raw Meilisearch response for subscribers (facets, analytics).
+    $results->setExtraData('meilisearch_response', $data->toArray());
+  }
+
+  /**
+   * Hook point for submodules to alter search options.
+   *
+   * Submodules dispatch events via kernel events; this method does nothing by
+   * default but can be overridden by tests/subclasses.
+   */
+  protected function alterSearchOptions(array &$options, QueryInterface $query): void {
+    // No-op by default. Event subscribers on the query alter hook modify options.
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getSupportedFeatures(): array {
+    return ['search_api_facets'];
+  }
+
   public function __sleep(): array {
     $properties = array_flip(parent::__sleep());
     unset($properties['api'], $properties['documentConverter'], $properties['filterBuilder'], $properties['logger']);
