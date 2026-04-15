@@ -9,7 +9,6 @@ services:
   meilisearch.api:
     class: Drupal\meilisearch\Api\MeilisearchApiService
     arguments: ['@meilisearch.client_factory']
-    shared: false
 
   meilisearch.document_converter:
     class: Drupal\meilisearch\Converter\DocumentConverter

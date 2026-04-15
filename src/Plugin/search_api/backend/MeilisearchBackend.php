@@ -498,7 +498,9 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
   }
 
   public function __wakeup(): void {
-    parent::__wakeup();
+    if (method_exists(get_parent_class($this), '__wakeup')) {
+      parent::__wakeup();
+    }
     $container = \Drupal::getContainer();
     $this->api = $container->get('meilisearch.api');
     $this->documentConverter = $container->get('meilisearch.document_converter');
