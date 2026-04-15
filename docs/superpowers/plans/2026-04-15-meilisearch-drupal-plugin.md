@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build an official Meilisearch backend module for Drupal's Search API framework, supporting Drupal 9.3/10/11, Meilisearch Cloud, semantic/hybrid search, facets, geo, synonyms, stop words, highlighting, and analytics.
+**Goal:** Build an official Meilisearch backend module for Drupal's Search API framework, supporting Drupal 9.3/10/11, Meilisearch Cloud, semantic/hybrid search, facets, geo, highlighting, and analytics.
 
-**Architecture:** Feature-rich core module (`meilisearch`) + two optional submodules (`meilisearch_facets`, `meilisearch_analytics`). The core module implements the Search API backend plugin and wraps `meilisearch-php ^1.16`. Submodules exist only when they have external Drupal dependencies (`drupal/facets`) or distinct optional scope (analytics).
+**Architecture:** Feature-rich core module (`meilisearch`) + two optional submodules (`meilisearch_facets`, `meilisearch_analytics`). The core module implements the Search API backend plugin and wraps `meilisearch-php ^1.16`. Submodules exist only when they have external Drupal dependencies (`drupal/facets`) or distinct optional scope (analytics). Server-level configuration (synonyms, stop words, ranking rules, embedders) is deferred to Meilisearch Cloud or the Meilisearch CLI / HTTP API — the Drupal module manages only field-level attribute sync derived from the Search API index configuration.
 
 **Tech Stack:**
 - PHP ^8.1
@@ -214,11 +214,6 @@ plugin.plugin_configuration.search_api_backend.meilisearch:
     embedder:
       type: string
       label: 'Embedder name'
-    ranking_rules:
-      type: sequence
-      label: 'Ranking rules'
-      sequence:
-        type: string
 ```
 
 - [ ] **Step 4: Commit**
@@ -1987,7 +1982,6 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
       'search_mode' => 'keyword',
       'semantic_ratio' => 0.5,
       'embedder' => '',
-      'ranking_rules' => ['sort', 'words', 'attribute', 'typo', 'proximity', 'exactness'],
     ];
   }
 
@@ -2131,12 +2125,17 @@ Append these methods to the `MeilisearchBackend` class (before `__sleep`):
       ],
     ];
 
-    $form['ranking_rules'] = [
-      '#type' => 'textarea',
-      '#title' => $this->t('Ranking rules (one per line, in order)'),
-      '#default_value' => implode("\n", $this->configuration['ranking_rules']),
-      '#description' => $this->t('Default: sort, words, attribute, typo, proximity, exactness.'),
-    ];
+    if ($this->configuration['connection_mode'] === 'cloud') {
+      $form['cloud_dashboard_link'] = [
+        '#type' => 'markup',
+        '#markup' => '<p>' . $this->t('<a href="https://cloud.meilisearch.com/projects" target="_blank" rel="noopener noreferrer">Manage synonyms, stop words, ranking rules, and embedders in your Meilisearch Cloud dashboard →</a>') . '</p>',
+        '#states' => [
+          'visible' => [
+            ':input[name="backend_config[connection_mode]"]' => ['value' => 'cloud'],
+          ],
+        ],
+      ];
+    }
 
     return $form;
   }
@@ -2157,12 +2156,6 @@ Append these methods to the `MeilisearchBackend` class (before `__sleep`):
     else {
       $form_state->setValue('is_cloud', FALSE);
     }
-
-    $rules = array_filter(array_map('trim', explode("\n", (string) $form_state->getValue('ranking_rules'))));
-    if (empty($rules)) {
-      $rules = ['sort', 'words', 'attribute', 'typo', 'proximity', 'exactness'];
-    }
-    $form_state->setValue('ranking_rules', array_values($rules));
 
     if ($form_state->getValue('search_mode') !== 'keyword' && !$form_state->getValue('embedder')) {
       $form_state->setErrorByName('embedder', $this->t('Embedder is required for semantic/hybrid search.'));
@@ -2306,7 +2299,6 @@ Append to the `MeilisearchBackend` class:
       'searchableAttributes' => $searchableAttributes ?: ['*'],
       'filterableAttributes' => array_values(array_unique($filterable)),
       'sortableAttributes' => array_values(array_unique($sortable)),
-      'rankingRules' => $this->configuration['ranking_rules'],
       'displayedAttributes' => ['*'],
     ];
   }
@@ -2539,7 +2531,6 @@ class MeilisearchBackendTest extends KernelTestBase {
     $this->assertSame('self_hosted', $config['connection_mode']);
     $this->assertSame(7700, $config['port']);
     $this->assertSame('keyword', $config['search_mode']);
-    $this->assertSame(['sort', 'words', 'attribute', 'typo', 'proximity', 'exactness'], $config['ranking_rules']);
   }
 
 }
@@ -2561,205 +2552,15 @@ git commit -m "test: add kernel test for backend plugin discovery"
 
 ## Phase 6: Processors
 
-### Task 19: Implement MeilisearchSynonyms processor
+### Task 19: [DROPPED — deferred to Meilisearch Cloud dashboard]
 
-**Files:**
-- Create: `src/Plugin/search_api/processor/MeilisearchSynonyms.php`
-
-- [ ] **Step 1: Create the processor**
-
-Create `src/Plugin/search_api/processor/MeilisearchSynonyms.php`:
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace Drupal\meilisearch\Plugin\search_api\processor;
-
-use Drupal\Core\Form\FormStateInterface;
-use Drupal\meilisearch\Api\MeilisearchApiException;
-use Drupal\meilisearch\Api\MeilisearchApiServiceInterface;
-use Drupal\search_api\IndexInterface;
-use Drupal\search_api\Plugin\search_api\processor\Property\IntegerProperty;
-use Drupal\search_api\Processor\ProcessorPluginBase;
-use Symfony\Component\DependencyInjection\ContainerInterface;
-
-/**
- * Pushes synonyms to Meilisearch on index save.
- *
- * @SearchApiProcessor(
- *   id = "meilisearch_synonyms",
- *   label = @Translation("Meilisearch synonyms"),
- *   description = @Translation("Sync synonyms to Meilisearch."),
- *   stages = {"preprocess_index" = 0}
- * )
- */
-class MeilisearchSynonyms extends ProcessorPluginBase {
-
-  protected MeilisearchApiServiceInterface $api;
-
-  public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition): static {
-    $instance = parent::create($container, $configuration, $plugin_id, $plugin_definition);
-    $instance->api = $container->get('meilisearch.api');
-    return $instance;
-  }
-
-  public static function supportsIndex(IndexInterface $index): bool {
-    return $index->getServerInstance()?->getBackendId() === 'meilisearch';
-  }
-
-  public function defaultConfiguration(): array {
-    return ['synonyms' => []];
-  }
-
-  public function buildConfigurationForm(array $form, FormStateInterface $form_state): array {
-    $lines = [];
-    foreach ($this->configuration['synonyms'] as $key => $values) {
-      $lines[] = $key . ': ' . implode(', ', $values);
-    }
-    $form['synonyms'] = [
-      '#type' => 'textarea',
-      '#title' => $this->t('Synonyms'),
-      '#default_value' => implode("\n", $lines),
-      '#description' => $this->t('One per line, format: <code>term: alt1, alt2</code>'),
-    ];
-    return $form;
-  }
-
-  public function submitConfigurationForm(array &$form, FormStateInterface $form_state): void {
-    $raw = (string) $form_state->getValue(['synonyms']);
-    $synonyms = [];
-    foreach (explode("\n", $raw) as $line) {
-      $line = trim($line);
-      if ($line === '' || !str_contains($line, ':')) {
-        continue;
-      }
-      [$key, $list] = explode(':', $line, 2);
-      $key = trim($key);
-      $values = array_filter(array_map('trim', explode(',', $list)));
-      if ($key !== '' && $values) {
-        $synonyms[$key] = array_values($values);
-      }
-    }
-    $this->configuration['synonyms'] = $synonyms;
-  }
-
-  /**
-   * Called by the backend after index save to sync synonyms.
-   */
-  public function syncToServer(IndexInterface $index): void {
-    try {
-      $task = $this->api->updateSettings($index->id(), [
-        'synonyms' => $this->configuration['synonyms'],
-      ]);
-      $this->api->waitForTask((int) $task['taskUid']);
-    }
-    catch (MeilisearchApiException $e) {
-      \Drupal::logger('meilisearch')->error($e->getMessage());
-    }
-  }
-
-}
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add src/Plugin/search_api/processor/MeilisearchSynonyms.php
-git commit -m "feat: add MeilisearchSynonyms processor"
-```
+Synonyms are a server-level setting best managed in the Meilisearch Cloud dashboard (or via the `meilisearch` CLI / HTTP API for self-hosted users); duplicating this in Drupal admin is out of scope.
 
 ---
 
-### Task 20: Implement MeilisearchStopWords processor
+### Task 20: [DROPPED — deferred to Meilisearch Cloud dashboard]
 
-**Files:**
-- Create: `src/Plugin/search_api/processor/MeilisearchStopWords.php`
-
-- [ ] **Step 1: Create the processor**
-
-Create `src/Plugin/search_api/processor/MeilisearchStopWords.php`:
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace Drupal\meilisearch\Plugin\search_api\processor;
-
-use Drupal\Core\Form\FormStateInterface;
-use Drupal\meilisearch\Api\MeilisearchApiException;
-use Drupal\meilisearch\Api\MeilisearchApiServiceInterface;
-use Drupal\search_api\IndexInterface;
-use Drupal\search_api\Processor\ProcessorPluginBase;
-use Symfony\Component\DependencyInjection\ContainerInterface;
-
-/**
- * Pushes stop words to Meilisearch on index save.
- *
- * @SearchApiProcessor(
- *   id = "meilisearch_stopwords",
- *   label = @Translation("Meilisearch stop words"),
- *   description = @Translation("Sync stop words to Meilisearch."),
- *   stages = {"preprocess_index" = 0}
- * )
- */
-class MeilisearchStopWords extends ProcessorPluginBase {
-
-  protected MeilisearchApiServiceInterface $api;
-
-  public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition): static {
-    $instance = parent::create($container, $configuration, $plugin_id, $plugin_definition);
-    $instance->api = $container->get('meilisearch.api');
-    return $instance;
-  }
-
-  public static function supportsIndex(IndexInterface $index): bool {
-    return $index->getServerInstance()?->getBackendId() === 'meilisearch';
-  }
-
-  public function defaultConfiguration(): array {
-    return ['stopwords' => []];
-  }
-
-  public function buildConfigurationForm(array $form, FormStateInterface $form_state): array {
-    $form['stopwords'] = [
-      '#type' => 'textarea',
-      '#title' => $this->t('Stop words'),
-      '#default_value' => implode("\n", $this->configuration['stopwords']),
-      '#description' => $this->t('One per line.'),
-    ];
-    return $form;
-  }
-
-  public function submitConfigurationForm(array &$form, FormStateInterface $form_state): void {
-    $raw = (string) $form_state->getValue(['stopwords']);
-    $words = array_filter(array_map('trim', explode("\n", $raw)));
-    $this->configuration['stopwords'] = array_values($words);
-  }
-
-  public function syncToServer(IndexInterface $index): void {
-    try {
-      $task = $this->api->updateSettings($index->id(), [
-        'stopWords' => $this->configuration['stopwords'],
-      ]);
-      $this->api->waitForTask((int) $task['taskUid']);
-    }
-    catch (MeilisearchApiException $e) {
-      \Drupal::logger('meilisearch')->error($e->getMessage());
-    }
-  }
-
-}
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add src/Plugin/search_api/processor/MeilisearchStopWords.php
-git commit -m "feat: add MeilisearchStopWords processor"
-```
+Stop words are a server-level setting best managed in the Meilisearch Cloud dashboard (or via the `meilisearch` CLI / HTTP API for self-hosted users); duplicating this in Drupal admin is out of scope.
 
 ---
 
@@ -2897,52 +2698,9 @@ git commit -m "feat: add MeilisearchHighlighting processor and wire into backend
 
 ---
 
-### Task 22: Wire synonyms/stopwords sync on index save
+### Task 22: [DROPPED — deferred to Meilisearch Cloud dashboard]
 
-**Files:**
-- Modify: `src/Plugin/search_api/backend/MeilisearchBackend.php` (call processor syncToServer in updateIndex)
-
-- [ ] **Step 1: Update buildIndexSettings and updateIndex**
-
-In `src/Plugin/search_api/backend/MeilisearchBackend.php`, modify `updateIndex` to trigger processor sync after settings update. Add after the `waitForTask()` call:
-
-```php
-  /**
-   * {@inheritdoc}
-   */
-  public function updateIndex(IndexInterface $index): void {
-    try {
-      $settings = $this->buildIndexSettings($index);
-      $task = $this->api->updateSettings($index->id(), $settings);
-      $this->api->waitForTask((int) $task['taskUid']);
-      $this->syncProcessorSettings($index);
-    }
-    catch (MeilisearchApiException $e) {
-      $this->logger->error('Failed to update index @id: @msg', [
-        '@id' => $index->id(),
-        '@msg' => $e->getMessage(),
-      ]);
-    }
-  }
-
-  /**
-   * Triggers syncToServer() on processors that support it.
-   */
-  protected function syncProcessorSettings(IndexInterface $index): void {
-    foreach ($index->getProcessors() as $processor) {
-      if (method_exists($processor, 'syncToServer')) {
-        $processor->syncToServer($index);
-      }
-    }
-  }
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add src/Plugin/search_api/backend/MeilisearchBackend.php
-git commit -m "feat: sync processor settings (synonyms, stopwords) on index update"
-```
+With synonyms and stop words removed from scope, there is no processor sync to wire on index save. Server-level settings are managed outside Drupal.
 
 ---
 

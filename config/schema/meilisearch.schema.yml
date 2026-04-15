@@ -26,8 +26,3 @@ plugin.plugin_configuration.search_api_backend.meilisearch:
     embedder:
       type: string
       label: 'Embedder name'
-    ranking_rules:
-      type: sequence
-      label: 'Ranking rules'
-      sequence:
-        type: string
