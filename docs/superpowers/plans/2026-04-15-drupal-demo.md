@@ -1417,7 +1417,7 @@ display:
           id: field_total_time
           table: search_api_index_recipes
           field: field_total_time
-          plugin_id: search_api_range_filter
+          plugin_id: search_api_numeric
           operator: between
           value:
             min: ''
@@ -1428,6 +1428,7 @@ display:
             label: 'Total time (minutes)'
             identifier: total_time
             remember: false
+            use_operator: false
           is_grouped: false
       sorts:
         search_api_relevance:
@@ -1472,7 +1473,7 @@ Key points:
 - Exposed range filter on `field_total_time`.
 - `items_per_page: 25`.
 
-> **Implementer note on range filter plugin:** the `search_api_range_filter` plugin_id above assumes the contrib `search_api_range_filter` module. If you prefer to stay core-only, swap for the plain `numeric` filter (`plugin_id: numeric`, operator `between`, expose `min` and `max` inputs). Either works; pick one and adjust the view YAML accordingly. If you add the contrib module, update `composer.json` (`drupal/search_api_range_filter`) and the profile's `.info.yml` dependencies.
+The filter uses Search API's built-in `search_api_numeric` plugin with `operator: between`, which renders as two min/max inputs. No contrib modules required.
 
 - [ ] **Step 2: Commit**
 
