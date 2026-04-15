@@ -458,13 +458,18 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
   }
 
   /**
-   * Hook point for submodules to alter search options.
-   *
-   * Submodules dispatch events via kernel events; this method does nothing by
-   * default but can be overridden by tests/subclasses.
+   * Hook point for submodules and processors to alter search options.
    */
   protected function alterSearchOptions(array &$options, QueryInterface $query): void {
-    // No-op by default. Event subscribers on the query alter hook modify options.
+    $hl = $query->getOption('meilisearch_highlighting');
+    if (is_array($hl)) {
+      $options['attributesToHighlight'] = $hl['fields'];
+      $options['highlightPreTag'] = $hl['pre_tag'];
+      $options['highlightPostTag'] = $hl['post_tag'];
+      $options['attributesToCrop'] = $hl['fields'];
+      $options['cropLength'] = $hl['crop_length'];
+      $options['cropMarker'] = $hl['crop_marker'];
+    }
   }
 
   /**
