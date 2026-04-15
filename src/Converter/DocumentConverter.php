@@ -51,7 +51,14 @@ class DocumentConverter implements DocumentConverterInterface {
       return;
     }
 
-    $converted = array_map(fn($v) => $this->castValue($v, $type), $values);
+    // Cast each value, then drop any that are NULL (e.g. unparseable dates).
+    // Empty value lists intentionally produce no field entry — Meilisearch
+    // treats absent keys as null for filtering.
+    $converted = array_filter(
+      array_map(fn($v) => $this->castValue($v, $type), $values),
+      static fn($v) => $v !== NULL,
+    );
+    $converted = array_values($converted);
     if (count($converted) === 1) {
       $doc[$id] = $converted[0];
     }
@@ -62,15 +69,31 @@ class DocumentConverter implements DocumentConverterInterface {
 
   /**
    * Casts a single value to its Meilisearch-appropriate type.
+   *
+   * Returns NULL for values that cannot be safely converted (e.g. an
+   * unparseable date string). Callers must treat NULL as "skip this value"
+   * rather than indexing it — Meilisearch rejects documents whose fields
+   * contain values incompatible with the field's declared type.
    */
   protected function castValue(mixed $value, string $type): mixed {
     return match ($type) {
-      'integer' => (int) $value,
-      'decimal' => (float) $value,
+      'integer' => is_numeric($value) ? (int) $value : NULL,
+      'decimal' => is_numeric($value) ? (float) $value : NULL,
       'boolean' => (bool) $value,
-      'date' => is_numeric($value) ? (int) $value : strtotime((string) $value),
+      'date' => $this->castDate($value),
       default => (string) $value,
     };
+  }
+
+  /**
+   * Casts a value to a Unix timestamp, returning NULL if it can't be parsed.
+   */
+  protected function castDate(mixed $value): ?int {
+    if (is_numeric($value)) {
+      return (int) $value;
+    }
+    $timestamp = strtotime((string) $value);
+    return $timestamp === FALSE ? NULL : $timestamp;
   }
 
 }

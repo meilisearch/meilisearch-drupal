@@ -60,6 +60,30 @@ class DocumentConverterTest extends TestCase {
     $this->assertSame(['lat' => 48.85, 'lng' => 2.29], $docs[0]['_geo']);
   }
 
+  /**
+   * Unparseable dates must not surface as FALSE/0 in the indexed document —
+   * Meilisearch would reject or silently mis-index such values. The field is
+   * omitted entirely instead.
+   *
+   * @covers ::convertToDocuments
+   */
+  public function testDropsUnparseableDateValues(): void {
+    $item = $this->buildItem('node/1', [
+      'created' => ['type' => 'date', 'values' => ['not-a-date', '2026-04-15', 'also-garbage']],
+      'bad_only' => ['type' => 'date', 'values' => ['nope']],
+      'bad_int' => ['type' => 'integer', 'values' => ['abc', '7']],
+    ]);
+    $converter = new DocumentConverter();
+    $docs = $converter->convertToDocuments([$item->getId() => $item]);
+
+    // The good date survived, the bad ones were dropped.
+    $this->assertSame(strtotime('2026-04-15'), $docs[0]['created']);
+    // No parseable values — field must be absent, not present as NULL/FALSE/0.
+    $this->assertArrayNotHasKey('bad_only', $docs[0]);
+    // Mixed integer: only the numeric value kept.
+    $this->assertSame(7, $docs[0]['bad_int']);
+  }
+
   private function buildItem(string $itemId, array $fields): ItemInterface {
     $item = $this->createMock(ItemInterface::class);
     $item->method('getId')->willReturn($itemId);
