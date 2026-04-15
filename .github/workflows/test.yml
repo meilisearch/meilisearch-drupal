@@ -1,0 +1,44 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, 1.x]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ['8.1', '8.2', '8.3']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+      - run: composer install --no-interaction --prefer-dist
+      - run: vendor/bin/phpunit --testsuite=unit
+
+  functional:
+    runs-on: ubuntu-latest
+    services:
+      meilisearch:
+        image: getmeili/meilisearch:latest
+        ports: ['7700:7700']
+        env:
+          MEILI_MASTER_KEY: testKey
+          MEILI_NO_ANALYTICS: 'true'
+        options: >-
+          --health-cmd "curl -f http://localhost:7700/health"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+      - run: composer install --no-interaction
+      - name: Verify Meilisearch reachable
+        run: curl -f http://localhost:7700/health
