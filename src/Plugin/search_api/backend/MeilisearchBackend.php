@@ -470,6 +470,11 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
       $options['cropLength'] = $hl['crop_length'];
       $options['cropMarker'] = $hl['crop_marker'];
     }
+
+    $facets = $query->getOption('meilisearch_facets');
+    if (is_array($facets) && $facets) {
+      $options['facets'] = $facets;
+    }
   }
 
   /**
