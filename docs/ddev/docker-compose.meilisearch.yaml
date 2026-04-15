@@ -1,0 +1,29 @@
+# Place this file at: .ddev/docker-compose.meilisearch.yaml
+services:
+  meilisearch:
+    container_name: ddev-${DDEV_SITENAME}-meilisearch
+    image: getmeili/meilisearch:latest
+    restart: 'no'
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    environment:
+      MEILI_MASTER_KEY: "masterKey123"
+      MEILI_ENV: "development"
+      VIRTUAL_HOST: ${DDEV_HOSTNAME}
+      HTTP_EXPOSE: "7700:7700"
+      HTTPS_EXPOSE: "7701:7700"
+    volumes:
+      - meili-data:/meili_data
+    networks:
+      - default
+      - ddev_default
+
+  web:
+    depends_on:
+      - meilisearch
+    links:
+      - meilisearch:meilisearch
+
+volumes:
+  meili-data: {}
