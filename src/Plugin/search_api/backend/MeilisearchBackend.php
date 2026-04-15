@@ -475,6 +475,13 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
     if (is_array($facets) && $facets) {
       $options['facets'] = $facets;
     }
+
+    // Analytics submodule may request queryUid metadata via custom fields.
+    if ($query->getOption('meilisearch_include_metadata')) {
+      $options['analyticsCustomFields'] = [
+        'drupal_query' => $query->getIndex()->id(),
+      ];
+    }
   }
 
   /**
