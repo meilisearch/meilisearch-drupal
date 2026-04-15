@@ -251,6 +251,98 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
     return $this->api->ping();
   }
 
+  /**
+   * {@inheritdoc}
+   */
+  public function addIndex(IndexInterface $index): void {
+    try {
+      $task = $this->api->createIndex($index->id());
+      $this->api->waitForTask((int) $task['taskUid']);
+      $this->updateIndex($index);
+    }
+    catch (MeilisearchApiException $e) {
+      $this->logger->error('Failed to add index @id: @msg', [
+        '@id' => $index->id(),
+        '@msg' => $e->getMessage(),
+      ]);
+    }
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function updateIndex(IndexInterface $index): void {
+    try {
+      $settings = $this->buildIndexSettings($index);
+      $task = $this->api->updateSettings($index->id(), $settings);
+      $this->api->waitForTask((int) $task['taskUid']);
+    }
+    catch (MeilisearchApiException $e) {
+      $this->logger->error('Failed to update index @id: @msg', [
+        '@id' => $index->id(),
+        '@msg' => $e->getMessage(),
+      ]);
+    }
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function removeIndex($index): void {
+    if (is_object($index) && method_exists($index, 'isReadOnly') && $index->isReadOnly()) {
+      return;
+    }
+    $id = is_object($index) ? $index->id() : (string) $index;
+    try {
+      $task = $this->api->deleteIndex($id);
+      $this->api->waitForTask((int) $task['taskUid']);
+    }
+    catch (MeilisearchApiException $e) {
+      $this->logger->error('Failed to remove index @id: @msg', ['@id' => $id, '@msg' => $e->getMessage()]);
+    }
+  }
+
+  /**
+   * Builds the bulk settings payload for an index.
+   */
+  protected function buildIndexSettings(IndexInterface $index): array {
+    $fields = $index->getFields();
+    $fieldNames = array_keys($fields);
+
+    // Sort searchable fields by boost descending.
+    $searchable = [];
+    foreach ($fields as $id => $field) {
+      if ($field->getType() === 'text') {
+        $searchable[$id] = $field->getBoost() ?? 1.0;
+      }
+    }
+    arsort($searchable);
+    $searchableAttributes = array_keys($searchable);
+
+    // Geo support: if any field is of type 'location', _geo must be filterable + sortable.
+    $hasGeo = FALSE;
+    foreach ($fields as $field) {
+      if ($field->getType() === 'location') {
+        $hasGeo = TRUE;
+        break;
+      }
+    }
+
+    $filterable = $fieldNames;
+    $sortable = $fieldNames;
+    if ($hasGeo) {
+      $filterable[] = '_geo';
+      $sortable[] = '_geo';
+    }
+
+    return [
+      'searchableAttributes' => $searchableAttributes ?: ['*'],
+      'filterableAttributes' => array_values(array_unique($filterable)),
+      'sortableAttributes' => array_values(array_unique($sortable)),
+      'displayedAttributes' => ['*'],
+    ];
+  }
+
   public function __sleep(): array {
     $properties = array_flip(parent::__sleep());
     unset($properties['api'], $properties['documentConverter'], $properties['filterBuilder'], $properties['logger']);
