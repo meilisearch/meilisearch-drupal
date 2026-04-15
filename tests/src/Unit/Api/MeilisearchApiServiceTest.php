@@ -24,8 +24,14 @@ class MeilisearchApiServiceTest extends TestCase {
     $service->setUrl('https://ms-abc123.fra.meilisearch.io');
     $this->assertTrue($service->isCloud());
 
+    $service->setUrl('https://meilisearch.io');
+    $this->assertTrue($service->isCloud(), 'Root meilisearch.io host should be detected as cloud.');
+
     $service->setUrl('http://127.0.0.1:7700');
     $this->assertFalse($service->isCloud());
+
+    $service->setUrl('https://evilmeilisearch.io');
+    $this->assertFalse($service->isCloud(), 'Confusable hostname must not be treated as cloud.');
   }
 
   /**

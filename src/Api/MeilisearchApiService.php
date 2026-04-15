@@ -6,6 +6,7 @@ namespace Drupal\meilisearch\Api;
 
 use Drupal\meilisearch\Client\MeilisearchClientFactoryInterface;
 use Meilisearch\Client;
+use Meilisearch\Contracts\FacetSearchQuery;
 use Meilisearch\Contracts\IndexesResults;
 use Meilisearch\Endpoints\Indexes;
 use Meilisearch\Exceptions\ApiException;
@@ -65,7 +66,7 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
   }
 
   public function isCloud(): bool {
-    return (bool) preg_match('/\.meilisearch\.io$/i', parse_url($this->url, PHP_URL_HOST) ?? '');
+    return (bool) preg_match('/(?:^|\.)meilisearch\.io$/i', parse_url($this->url, PHP_URL_HOST) ?? '');
   }
 
   public function createIndex(string $indexUid): array {
@@ -142,7 +143,7 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
 
   public function searchFacets(string $indexUid, string $facetName, ?string $facetQuery = NULL, ?array $filter = NULL, ?string $query = NULL): FacetSearchResult {
     try {
-      $queryObj = (new \Meilisearch\Contracts\FacetSearchQuery())
+      $queryObj = (new FacetSearchQuery())
         ->setFacetName($facetName);
       if ($facetQuery !== NULL) {
         $queryObj->setFacetQuery($facetQuery);
