@@ -1165,11 +1165,11 @@ backend_config:
   connection_mode: self_hosted
   host: 'http://meilisearch'
   port: 7700
-  cloud_host: ''
   api_key: 'masterKey123'
+  is_cloud: false
   search_mode: keyword
-  embedder_name: ''
   semantic_ratio: 0.5
+  embedder: ''
 ```
 
 Key points:
@@ -1267,9 +1267,10 @@ processor_settings:
   meilisearch_highlighting:
     weights:
       preprocess_query: 0
-    highlight_fields:
-      - title
-      - body
+    fields:
+      title: title
+      body: body
+      field_ingredients: '0'
     pre_tag: '<mark>'
     post_tag: '</mark>'
     crop_length: 15
