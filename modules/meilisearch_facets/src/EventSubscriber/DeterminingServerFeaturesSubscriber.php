@@ -18,7 +18,7 @@ class DeterminingServerFeaturesSubscriber implements EventSubscriberInterface {
   }
 
   public function onDetermining(DeterminingServerFeaturesEvent $event): void {
-    if ($event->getBackend()->getPluginId() !== 'meilisearch') {
+    if ($event->getServer()->getBackend()->getPluginId() !== 'meilisearch') {
       return;
     }
     $features = $event->getFeatures();
