@@ -21,11 +21,10 @@ class DeterminingServerFeaturesSubscriber implements EventSubscriberInterface {
     if ($event->getServer()->getBackend()->getPluginId() !== 'meilisearch') {
       return;
     }
-    $features = $event->getFeatures();
+    $features = &$event->getFeatures();
     if (!in_array('search_api_facets', $features, TRUE)) {
       $features[] = 'search_api_facets';
     }
-    $event->setFeatures($features);
   }
 
 }
