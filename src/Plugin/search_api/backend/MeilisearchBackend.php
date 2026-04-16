@@ -35,7 +35,6 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
   protected MeilisearchApiServiceInterface $api;
   protected DocumentConverterInterface $documentConverter;
   protected FilterBuilderInterface $filterBuilder;
-  protected LoggerInterface $logger;
 
   public function __construct(
     array $configuration,
