@@ -23,9 +23,15 @@ $config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('ME
 
 The same works for the URL, so each environment points at its own instance.
 
+## Changing the connection
+
+Saving the server with a new URL, key or index prefix creates the indexes on the new target, pushes their settings and queues everything for re-indexing. When the URL comes from a `settings.php` override instead, the module creates a missing index the first time it indexes into it.
+
+Read-only indexes are never created and their settings never changed: use them to search an index another site or environment maintains.
+
 ## What the module manages
 
-On every index save the module sends the searchable, filterable and sortable attributes, `pagination.maxTotalHits` and `faceting.maxValuesPerFacet`. When it creates an index it also puts the `sort` ranking rule first, so explicit sorts are strict. It never touches synonyms, stop words, typo tolerance or embedders, nor the ranking rules of existing indexes.
+On every index save the module sends the searchable, filterable and sortable attributes, `pagination.maxTotalHits`, and faceting settings (1,000 values per facet, ranked by count). When it creates an index it also puts the `sort` ranking rule first, so explicit sorts are strict. It never touches synonyms, stop words, typo tolerance or embedders, nor the ranking rules of existing indexes.
 
 ## Discouraged processors
 

@@ -105,6 +105,26 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   }
 
   /**
+   * Cached view results must not replay an old query UID.
+   */
+  public function testCachedViewsGetFreshQueryUids(): void {
+    $this->requireSearchMetadata();
+    $view_config = \Drupal::configFactory()->getEditable('views.view.meilisearch_test_view');
+    $view_config->set('display.default.display_options.cache', ['type' => 'search_api_tag', 'options' => []])->save();
+
+    $uids = [];
+    for ($run = 0; $run < 2; $run++) {
+      $view = Views::getView('meilisearch_test_view');
+      $build = $view->preview();
+      $html = (string) \Drupal::service('renderer')->renderRoot($build);
+      preg_match('/data-meilisearch-query-uid="([0-9a-f-]{36})"/', $html, $match);
+      $uids[] = $match[1] ?? NULL;
+    }
+    $this->assertNotNull($uids[0]);
+    $this->assertNotSame($uids[0], $uids[1]);
+  }
+
+  /**
    * The click endpoint validates its input.
    */
   public function testClickEndpointValidatesInput(): void {

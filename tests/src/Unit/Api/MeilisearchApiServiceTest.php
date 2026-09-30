@@ -9,6 +9,7 @@ use Drupal\meilisearch\Api\MeilisearchApiException;
 use Drupal\meilisearch\Api\MeilisearchApiFactory;
 use Drupal\meilisearch\Api\MeilisearchApiServiceInterface;
 use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
@@ -98,6 +99,25 @@ class MeilisearchApiServiceTest extends TestCase {
     $api = $this->api([new ConnectException('Connection refused', new Request('POST', '/'))]);
     $this->expectException(MeilisearchApiException::class);
     $api->search('idx', 'foo', []);
+  }
+
+  /**
+   * TLS and transfer errors are not "network" errors for the SDK.
+   *
+   * @covers ::search
+   * @covers ::waitForTask
+   */
+  public function testTransferErrorsThrow(): void {
+    $error = new RequestException('cURL error 60: SSL certificate problem', new Request('POST', '/'));
+    try {
+      $this->api([$error])->search('idx', 'foo', []);
+      $this->fail('A transfer error during search must throw MeilisearchApiException.');
+    }
+    catch (MeilisearchApiException $e) {
+      $this->assertStringContainsString('cURL error 60', $e->getMessage());
+    }
+    $this->expectException(MeilisearchApiException::class);
+    $this->api([$error])->waitForTask(7);
   }
 
   /**

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\meilisearch\Kernel;
 
+use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
 use Drupal\Core\Form\FormState;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\search_api\Entity\Index;
@@ -93,8 +94,15 @@ class MeilisearchBackendTest extends KernelTestBase {
     $index = Index::load($this->indexId);
     $query = $index->query()->keys('foo');
 
-    $this->expectException(SearchApiException::class);
-    $server->getBackend()->search($query);
+    try {
+      $server->getBackend()->search($query);
+      $this->fail('Searching an unreachable server must throw.');
+    }
+    catch (SearchApiException) {
+      // A failed search must not be cached as "no results".
+      $this->assertInstanceOf(RefinableCacheableDependencyInterface::class, $query);
+      $this->assertSame(0, $query->getCacheMaxAge());
+    }
   }
 
   /**
@@ -161,6 +169,93 @@ class MeilisearchBackendTest extends KernelTestBase {
     $form_state->setValues(['api_key' => ''] + $backend->getConfiguration());
     $backend->submitConfigurationForm($form, $form_state);
     $this->assertSame('stored-secret', $backend->getConfiguration()['api_key']);
+  }
+
+  /**
+   * Results expose how long Meilisearch took.
+   */
+  public function testResultsExposeProcessingTime(): void {
+    $this->indexItems($this->indexId);
+    $results = Index::load($this->indexId)->query()->keys('foo')->execute();
+    $this->assertIsInt($results->getExtraData('meilisearch_processing_time_ms'));
+  }
+
+  /**
+   * Changing the index prefix sets up the new indexes and re-indexes.
+   */
+  public function testChangingThePrefixSetsUpNewIndexes(): void {
+    $this->indexItems($this->indexId);
+    // Let the form change the prefix: drop its override and cached copies.
+    unset($GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['index_prefix']);
+    \Drupal::configFactory()->reset();
+    \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+    $server = Server::load('meilisearch_test_server');
+    $server->setBackendConfig(['index_prefix' => $this->meilisearchPrefix . 'moved_'] + $server->getBackendConfig());
+    $server->save();
+
+    $uid = $this->meilisearchPrefix . 'moved_' . $this->indexId;
+    $settings = $this->meilisearchClient()->index($uid)->getSettings();
+    $this->assertContains('search_api_language', $settings['filterableAttributes']);
+    $this->assertSame(0, Index::load($this->indexId)->getTrackerInstance()->getIndexedItemsCount(), 'Items are queued for re-indexing.');
+  }
+
+  /**
+   * Indexing recreates a Meilisearch index deleted behind Drupal's back.
+   *
+   * This happens when an environment's URL is overridden in settings.php and
+   * points at a fresh instance.
+   */
+  public function testIndexingSetsUpMissingIndexes(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+
+    $this->indexItems($this->indexId);
+    $settings = $client->index($uid)->getSettings();
+    $this->assertContains('search_api_language', $settings['filterableAttributes']);
+    $this->assertSame(2, Index::load($this->indexId)->query()->addCondition('type', 'article')->execute()->getResultCount(), 'Filters work on the recreated index.');
+  }
+
+  /**
+   * Saving a read-only index leaves the Meilisearch settings alone.
+   */
+  public function testReadOnlyIndexesKeepTheirSettings(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->index($uid)->updateFilterableAttributes(['owned_elsewhere'])['taskUid']);
+
+    $index->set('read_only', TRUE);
+    $index->save();
+    $this->assertSame(['owned_elsewhere'], $client->index($uid)->getFilterableAttributes());
+  }
+
+  /**
+   * Meilisearch must rank facet values by count before truncating them.
+   */
+  public function testFacetValuesAreRankedByCount(): void {
+    $uid = $this->meilisearchBackend()->getIndexUid(Index::load($this->indexId));
+    $faceting = $this->meilisearchClient()->index($uid)->getSettings()['faceting'];
+    $this->assertSame(['*' => 'count'], $faceting['sortFacetValuesBy']);
+  }
+
+  /**
+   * The search parameters hook also applies to facet count queries.
+   */
+  public function testSearchParamsHookAppliesToFacetQueries(): void {
+    $this->indexItems($this->indexId);
+    \Drupal::state()->set('meilisearch_test.extra_filter', 'type = "item"');
+
+    $query = Index::load($this->indexId)->query();
+    $query->createAndAddConditionGroup('OR', ['facet:category'])->addCondition('category', 'item_category');
+    $query->setOption('search_api_facets', [
+      'category' => ['field' => 'category', 'limit' => 0, 'min_count' => 1, 'missing' => FALSE, 'operator' => 'or'],
+    ]);
+    $results = $query->execute();
+
+    $this->assertSame(2, $results->getResultCount());
+    $this->assertSame([['count' => 2, 'filter' => '"item_category"']], $results->getExtraData('search_api_facets')['category']);
   }
 
 }

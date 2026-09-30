@@ -106,6 +106,20 @@ class DocumentConverterTest extends TestCase {
   }
 
   /**
+   * Out-of-range coordinates would make Meilisearch reject the whole batch.
+   *
+   * @covers ::convertToDocuments
+   */
+  public function testInvalidCoordinatesAreDropped(): void {
+    $converter = new DocumentConverter();
+    foreach (['91,2', '48,181', 'abc,def', 'nowhere'] as $value) {
+      $item = $this->buildItem('node/1', ['home' => ['type' => 'location', 'values' => [$value]]]);
+      $docs = $converter->convertToDocuments([$item->getId() => $item]);
+      $this->assertArrayNotHasKey('_geo', $docs[0], "'$value' is not a valid location.");
+    }
+  }
+
+  /**
    * Tests that unparseable dates are dropped.
    *
    * They must not surface as FALSE/0 in the indexed document: Meilisearch

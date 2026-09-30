@@ -78,6 +78,7 @@ class MeilisearchHighlighting extends ProcessorPluginBase implements PluginFormI
       '#type' => 'textfield',
       '#title' => $this->t('Highlight opening tag'),
       '#default_value' => $this->configuration['pre_tag'],
+      '#description' => $this->t('Views only keeps basic HTML in excerpts: use &lt;strong&gt;, &lt;em&gt;, &lt;cite&gt; or &lt;code&gt;.'),
     ];
     $form['post_tag'] = [
       '#type' => 'textfield',
@@ -150,9 +151,27 @@ class MeilisearchHighlighting extends ProcessorPluginBase implements PluginFormI
       }
       if ($highlighted) {
         $item->setExtraData('highlighted_fields', $highlighted);
-        $item->setExcerpt(implode(' ', array_merge(...array_values($highlighted))));
+        $item->setExcerpt($this->joinSnippets(array_merge(...array_values($highlighted))));
       }
     }
+  }
+
+  /**
+   * Joins snippets with the crop marker, without doubling it.
+   *
+   * @param string[] $snippets
+   *   Highlighted snippets, possibly starting or ending with the marker.
+   */
+  protected function joinSnippets(array $snippets): string {
+    $marker = (string) $this->configuration['crop_marker'];
+    if ($marker === '') {
+      return implode(' ', $snippets);
+    }
+    $starts = str_starts_with(reset($snippets), $marker);
+    $ends = str_ends_with(end($snippets), $marker);
+    $pattern = '/^\s*' . preg_quote($marker, '/') . '|' . preg_quote($marker, '/') . '\s*$/u';
+    $trimmed = array_map(fn(string $snippet) => trim(preg_replace($pattern, '', $snippet)), $snippets);
+    return ($starts ? $marker : '') . implode(" $marker ", $trimmed) . ($ends ? $marker : '');
   }
 
   /**

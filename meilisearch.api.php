@@ -27,16 +27,25 @@ function hook_meilisearch_request_headers_alter(array &$headers, ?\Drupal\search
 /**
  * Alters the Meilisearch search parameters of a Search API query.
  *
+ * Called for the main search and for each extra query computing facet
+ * counts (OR facets, zero counts, missing values), so a filter added here
+ * restricts the facet counts too.
+ *
  * @param array $params
  *   The search parameters, as documented at
  *   https://www.meilisearch.com/docs/reference/api/search.
  * @param \Drupal\search_api\Query\QueryInterface $query
  *   The Search API query.
+ * @param array $context
+ *   Which query this is. The "query" key is "main", "facet_values",
+ *   "facet_all_values" or "facet_missing"; facet queries also have the facet
+ *   ID in "facet". Paging and facet parameters of facet queries are reset
+ *   after the hook.
  */
-function hook_meilisearch_search_params_alter(array &$params, \Drupal\search_api\Query\QueryInterface $query): void {
-  if ($query->getSearchId() === 'views_page:search__page_1') {
-    $params['rankingScoreThreshold'] = 0.2;
-  }
+function hook_meilisearch_search_params_alter(array &$params, \Drupal\search_api\Query\QueryInterface $query, array $context): void {
+  // Only show the current tenant's documents, in results and facet counts.
+  $tenant = \Drupal::service('mymodule.tenant')->id();
+  $params['filter'] = isset($params['filter']) ? "({$params['filter']}) AND tenant = $tenant" : "tenant = $tenant";
 }
 
 /**

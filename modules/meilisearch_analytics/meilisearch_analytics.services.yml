@@ -10,3 +10,8 @@ services:
   meilisearch_analytics.row_attributes:
     class: Drupal\meilisearch_analytics\RowAttributes
     arguments: ['@page_cache_kill_switch']
+
+  meilisearch_analytics.uncacheable_query_subscriber:
+    class: Drupal\meilisearch_analytics\EventSubscriber\UncacheableQuerySubscriber
+    tags:
+      - { name: event_subscriber }

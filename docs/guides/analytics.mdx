@@ -14,7 +14,7 @@ drush en meilisearch_analytics -y
 - Rows of views on Meilisearch indexes, in the *Unformatted list* and *HTML list* styles, get `data-meilisearch-*` attributes, and a small script reports clicks on links inside them.
 - Clicks go to `/meilisearch/analytics/click` on your site, never to Meilisearch directly, so no key reaches the browser. The endpoint validates its input, refuses cross-site requests and accepts 60 clicks per minute per client.
 
-Pages showing tracked results are not cached, since each search has its own query UID.
+Pages showing tracked results are not cached, and Search API does not cache Meilisearch results while the submodule is on, since each search has its own query UID.
 
 ## Conversions
 

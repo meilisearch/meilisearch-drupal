@@ -6,11 +6,13 @@ See `meilisearch.api.php`.
 
 ## hook_meilisearch_search_params_alter()
 
-Alter the [search parameters](https://www.meilisearch.com/docs/reference/api/search) of a query before it is sent.
+Alter the [search parameters](https://www.meilisearch.com/docs/reference/api/search) of a query before it is sent. The hook runs for the main search and for every extra query computing facet counts, so a filter added here also restricts the counts. `$context['query']` says which: `main`, `facet_values`, `facet_all_values` or `facet_missing`.
 
 ```php
-function mymodule_meilisearch_search_params_alter(array &$params, \Drupal\search_api\Query\QueryInterface $query): void {
-  $params['rankingScoreThreshold'] = 0.2;
+function mymodule_meilisearch_search_params_alter(array &$params, \Drupal\search_api\Query\QueryInterface $query, array $context): void {
+  if ($context['query'] === 'main') {
+    $params['rankingScoreThreshold'] = 0.2;
+  }
 }
 ```
 

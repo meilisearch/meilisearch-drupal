@@ -1,0 +1,22 @@
+<?php
+
+/**
+ * @file
+ * Hooks of the Meilisearch test module.
+ */
+
+declare(strict_types=1);
+
+use Drupal\search_api\Query\QueryInterface;
+
+/**
+ * Implements hook_meilisearch_search_params_alter().
+ *
+ * Adds the filter stored in the "meilisearch_test.extra_filter" state.
+ */
+function meilisearch_test_meilisearch_search_params_alter(array &$params, QueryInterface $query, array $context): void {
+  $filter = \Drupal::state()->get('meilisearch_test.extra_filter');
+  if ($filter) {
+    $params['filter'] = isset($params['filter']) ? "({$params['filter']}) AND ($filter)" : $filter;
+  }
+}

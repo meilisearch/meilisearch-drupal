@@ -12,6 +12,7 @@ description: How Search API queries map to Meilisearch, and where results differ
 ## Conditions
 
 - Every Search API operator is supported, on every indexed field and on `search_api_id`, `search_api_datasource` and `search_api_language`.
+- String conditions are case-insensitive.
 - Conditions on fulltext fields match the whole field value, not words in it.
 - Exact conditions on string values longer than about 250 bytes cannot match: Meilisearch truncates long filter values.
 - Conditions that cannot be expressed raise an exception instead of being ignored.
@@ -25,4 +26,5 @@ description: How Search API queries map to Meilisearch, and where results differ
 ## Results
 
 - Result counts are exact when the offset is a multiple of the page size (always the case with Views pagers), estimated otherwise.
-- Each result carries its Meilisearch ranking score (0 to 1).
+- Each result carries its Meilisearch ranking score (0 to 1), and the result set its processing time (`meilisearch_processing_time_ms` extra data).
+- A failed search is never cached: Views shows no results until Meilisearch answers again.

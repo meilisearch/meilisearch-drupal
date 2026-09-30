@@ -11,6 +11,7 @@ use Meilisearch\Client;
 use Meilisearch\Exceptions\ApiException;
 use Meilisearch\Exceptions\ExceptionInterface;
 use Meilisearch\Exceptions\TimeOutException;
+use Psr\Http\Client\ClientExceptionInterface;
 
 /**
  * Wraps the Meilisearch PHP client for one instance.
@@ -70,6 +71,22 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
    */
   public function version(): array {
     return $this->call(fn() => $this->client->version());
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function indexExists(string $uid): bool {
+    try {
+      $this->call(fn() => $this->client->getRawIndex($uid));
+      return TRUE;
+    }
+    catch (MeilisearchApiException $e) {
+      if ($e->getErrorCode() === 'index_not_found') {
+        return FALSE;
+      }
+      throw $e;
+    }
   }
 
   /**
@@ -154,9 +171,13 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
       throw new MeilisearchApiException(sprintf('Meilisearch task %d did not finish within %d ms.', $taskUid, $timeoutMs), 'task_timeout', $e);
     }
     // The SDK only declares TimeOutException, but polling the task can fail
-    // with API and network errors too.
+    // with API, network and transfer errors too.
     // @phpstan-ignore catch.neverThrown
     catch (ExceptionInterface $e) {
+      throw $this->convert($e);
+    }
+    // @phpstan-ignore catch.neverThrown
+    catch (ClientExceptionInterface $e) {
       throw $this->convert($e);
     }
     if (($task['status'] ?? NULL) === 'failed') {
@@ -181,7 +202,9 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
     try {
       return $callback();
     }
-    catch (ExceptionInterface $e) {
+    // The SDK only wraps connection errors; TLS and transfer errors (Guzzle
+    // RequestException) come through as PSR-18 client exceptions.
+    catch (ExceptionInterface | ClientExceptionInterface $e) {
       throw $this->convert($e);
     }
   }
@@ -189,7 +212,7 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
   /**
    * Converts an SDK exception.
    */
-  protected function convert(ExceptionInterface $e): MeilisearchApiException {
+  protected function convert(ExceptionInterface|ClientExceptionInterface $e): MeilisearchApiException {
     if ($e instanceof ApiException) {
       return new MeilisearchApiException($e->getMessage(), $e->errorCode, $e);
     }

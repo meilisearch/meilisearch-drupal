@@ -40,6 +40,11 @@ interface MeilisearchApiServiceInterface {
   public function version(): array;
 
   /**
+   * Returns TRUE if the index exists.
+   */
+  public function indexExists(string $uid): bool;
+
+  /**
    * Creates an index. Returns the enqueued task.
    */
   public function createIndex(string $uid, string $primaryKey): array;

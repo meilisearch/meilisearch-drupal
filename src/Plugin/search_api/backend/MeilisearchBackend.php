@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\meilisearch\Plugin\search_api\backend;
 
 use Drupal\Component\Utility\UrlHelper;
+use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Plugin\PluginFormInterface;
@@ -53,6 +54,13 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
    * The API service of this server, created on first use.
    */
   protected ?MeilisearchApiServiceInterface $api = NULL;
+
+  /**
+   * Meilisearch index UIDs known to exist during this request.
+   *
+   * @var array<string, true>
+   */
+  protected array $existingIndexes = [];
 
   /**
    * Constructs a MeilisearchBackend.
@@ -112,6 +120,39 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   public function setConfiguration(array $configuration): void {
     parent::setConfiguration($configuration);
     $this->api = NULL;
+    $this->existingIndexes = [];
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * A new URL, key or prefix points at other Meilisearch indexes: set them up
+   * and re-index. A new result limit only needs the settings pushed again.
+   */
+  public function postUpdate(): bool {
+    $server = $this->getServer();
+    // Drupal 11.2 added getOriginal(); earlier versions use the property.
+    $original = method_exists($server, 'getOriginal') ? $server->getOriginal() : ($server->original ?? NULL);
+    if (!$original) {
+      return FALSE;
+    }
+    $old = $original->getBackendConfig();
+    $changed = fn(string $key) => ($old[$key] ?? NULL) !== ($this->configuration[$key] ?? NULL);
+
+    if ($changed('url') || $changed('api_key') || $changed('index_prefix')) {
+      foreach ($server->getIndexes() as $index) {
+        $this->addIndex($index);
+      }
+      return TRUE;
+    }
+    if ($changed('max_total_hits')) {
+      foreach ($server->getIndexes() as $index) {
+        if (!$index->isReadOnly()) {
+          $this->pushSettings($index);
+        }
+      }
+    }
+    return FALSE;
   }
 
   /**
@@ -338,6 +379,11 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
    * {@inheritdoc}
    */
   public function addIndex(IndexInterface $index): void {
+    // A read-only index belongs to someone else (another site, production):
+    // never create it or change its settings.
+    if ($index->isReadOnly()) {
+      return;
+    }
     $uid = $this->getIndexUid($index);
     $created = FALSE;
     try {
@@ -355,12 +401,16 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     // effect on searches without a sort. Only done for new indexes: ranking
     // rules are then managed in Meilisearch (dashboard, API or CLI).
     $this->pushSettings($index, $created ? ['rankingRules' => self::RANKING_RULES] : []);
+    $this->existingIndexes[$uid] = TRUE;
   }
 
   /**
    * {@inheritdoc}
    */
   public function updateIndex(IndexInterface $index): void {
+    if ($index->isReadOnly()) {
+      return;
+    }
     $this->pushSettings($index);
     // Drupal 11.2 added getOriginal(); earlier versions use the property.
     // @phpstan-ignore function.alreadyNarrowedType
@@ -397,6 +447,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     if (!$items) {
       return [];
     }
+    $this->ensureIndex($index);
     $uid = $this->getIndexUid($index);
     try {
       $task = $this->getApi()->addDocuments($uid, $this->documentConverter->convertToDocuments($items), DocumentConverterInterface::PRIMARY_KEY);
@@ -443,10 +494,13 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     $extra_filters = [$this->languageFilter($query), $this->locationFilter($query)];
     $facets = new FacetBuilder($query, $this->filterBuilder, $params, $extra_filters);
     $params = $facets->alterMainQuery($params);
-    $this->moduleHandler->alter('meilisearch_search_params', $params, $query);
+    $context = ['query' => 'main'];
+    $this->moduleHandler->alter('meilisearch_search_params', $params, $query, $context);
 
     try {
-      $extra = $facets->extraQueries($uid);
+      $extra = $facets->extraQueries($uid, function (array &$facet_params, array $context) use ($query): void {
+        $this->moduleHandler->alter('meilisearch_search_params', $facet_params, $query, $context);
+      });
       if ($extra) {
         $responses = $this->getApi()->multiSearch(array_merge([['indexUid' => $uid] + $params], $extra));
         $response = array_shift($responses);
@@ -457,6 +511,10 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       }
     }
     catch (MeilisearchApiException $e) {
+      // Do not let Search API or Views cache the empty result.
+      if ($query instanceof RefinableCacheableDependencyInterface) {
+        $query->mergeCacheMaxAge(0);
+      }
       throw $this->wrap($e, 'search', $uid);
     }
 
@@ -482,6 +540,9 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       $results->setExtraData('meilisearch_query_uid', $response['metadata']['queryUid']);
     }
     $results->setExtraData('meilisearch_index_uid', $uid);
+    if (isset($response['processingTimeMs'])) {
+      $results->setExtraData('meilisearch_processing_time_ms', (int) $response['processingTimeMs']);
+    }
   }
 
   /**
@@ -666,7 +727,8 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       'sortableAttributes' => $attributes,
       'displayedAttributes' => ['*'],
       'pagination' => ['maxTotalHits' => (int) $this->configuration['max_total_hits']],
-      'faceting' => ['maxValuesPerFacet' => self::MAX_VALUES_PER_FACET],
+      // Rank values by count before Meilisearch truncates them.
+      'faceting' => ['maxValuesPerFacet' => self::MAX_VALUES_PER_FACET, 'sortFacetValuesBy' => ['*' => 'count']],
     ];
   }
 
@@ -684,6 +746,32 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     catch (MeilisearchApiException $e) {
       throw $this->wrap($e, 'update settings of', $uid);
     }
+  }
+
+  /**
+   * Sets up the Meilisearch index if it does not exist.
+   *
+   * Meilisearch would otherwise create it on the first documents, without
+   * filterable or sortable attributes. That happens when an environment
+   * points at a fresh instance through a settings.php override.
+   *
+   * @throws \Drupal\search_api\SearchApiException
+   */
+  protected function ensureIndex(IndexInterface $index): void {
+    $uid = $this->getIndexUid($index);
+    if (isset($this->existingIndexes[$uid])) {
+      return;
+    }
+    try {
+      $exists = $this->getApi()->indexExists($uid);
+    }
+    catch (MeilisearchApiException $e) {
+      throw $this->wrap($e, 'check', $uid);
+    }
+    if (!$exists) {
+      $this->addIndex($index);
+    }
+    $this->existingIndexes[$uid] = TRUE;
   }
 
   /**

@@ -50,12 +50,16 @@ class DocumentConverter implements DocumentConverterInterface {
         return;
       }
       $first = reset($values);
+      $lat = $lng = NULL;
       if (is_string($first) && str_contains($first, ',')) {
         [$lat, $lng] = array_map('trim', explode(',', $first, 2));
-        $doc['_geo'] = ['lat' => (float) $lat, 'lng' => (float) $lng];
       }
       elseif (is_array($first) && isset($first['lat'], $first['lng'])) {
-        $doc['_geo'] = ['lat' => (float) $first['lat'], 'lng' => (float) $first['lng']];
+        ['lat' => $lat, 'lng' => $lng] = $first;
+      }
+      // Meilisearch rejects the whole batch for one invalid point: drop it.
+      if (is_numeric($lat) && is_numeric($lng) && abs((float) $lat) <= 90 && abs((float) $lng) <= 180) {
+        $doc['_geo'] = ['lat' => (float) $lat, 'lng' => (float) $lng];
       }
       return;
     }

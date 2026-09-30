@@ -51,7 +51,7 @@ class MeilisearchHighlightingTest extends KernelTestBase {
     $index = Index::load('meilisearch_test_index');
     $processor = \Drupal::getContainer()->get('search_api.plugin_helper')
       ->createProcessorPlugin($index, 'meilisearch_highlighting', [
-        'fields' => ['body'],
+        'fields' => ['name', 'body'],
         'pre_tag' => '<strong>',
         'post_tag' => '</strong>',
         'crop_length' => 6,
@@ -60,7 +60,7 @@ class MeilisearchHighlightingTest extends KernelTestBase {
     $index->addProcessor($processor)->save();
 
     $this->addTestEntity(1, [
-      'name' => 'Item',
+      'name' => 'Wombat stew',
       'type' => 'item',
       'body' => 'one two three <script>alert(1)</script> four five six seven eight nine ten eleven twelve wombat end',
     ]);
@@ -83,9 +83,10 @@ class MeilisearchHighlightingTest extends KernelTestBase {
     $item = current($results->getResultItems());
     $excerpt = (string) $item->getExcerpt();
 
-    $this->assertStringContainsString('<strong>wombat</strong>', $excerpt);
-    $this->assertStringStartsWith('…', $excerpt, 'The body is cropped around the match.');
-    $this->assertSame(['body' => [$excerpt]], $item->getExtraData('highlighted_fields'));
+    $this->assertStringStartsWith('<strong>Wombat</strong> stew … ', $excerpt, 'Snippets of different fields are separated by the crop marker.');
+    $this->assertStringContainsString('<strong>wombat</strong> end', $excerpt);
+    $this->assertStringNotContainsString('… …', $excerpt);
+    $this->assertSame(['name', 'body'], array_keys($item->getExtraData('highlighted_fields')));
 
     $results = Index::load('meilisearch_test_index')->query()->keys('script')->execute();
     $excerpt = (string) current($results->getResultItems())->getExcerpt();

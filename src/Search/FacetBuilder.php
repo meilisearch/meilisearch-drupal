@@ -108,35 +108,49 @@ final class FacetBuilder {
    *
    * @param string $uid
    *   The Meilisearch index UID.
+   * @param callable|null $alter
+   *   Called with each query (by reference) and a context array ("query" is
+   *   "facet_values", "facet_all_values" or "facet_missing", "facet" is the
+   *   facet ID), so hook_meilisearch_search_params_alter() also applies to
+   *   facet counts. The keys the counts depend on are restored afterwards.
    *
    * @return array[]
    *   Multi-search queries. Position 0 is reserved for the main query.
    */
-  public function extraQueries(string $uid): array {
+  public function extraQueries(string $uid, ?callable $alter = NULL): array {
     $shared = array_flip(['q', 'hybrid', 'matchingStrategy', 'attributesToSearchOn']);
     $base = ['indexUid' => $uid] + array_intersect_key($this->params, $shared);
     $queries = [];
     foreach ($this->facets as $id => $facet) {
       $field = $facet['field'];
       if ($this->needsOwnQuery($id)) {
-        $queries[] = $base + array_filter(['filter' => $this->filters[$id]]) + ['facets' => [$field], 'limit' => 0];
+        $params = $base + array_filter(['filter' => $this->filters[$id]]);
+        $queries[] = $this->prepare($params, ['facets' => [$field], 'limit' => 0], 'facet_values', $id, $alter);
         $this->positions[$id]['values'] = count($queries);
       }
       if ((int) ($facet['min_count'] ?? 1) < 1) {
-        $queries[] = ['indexUid' => $uid, 'facets' => [$field], 'limit' => 0];
+        $queries[] = $this->prepare(['indexUid' => $uid], ['facets' => [$field], 'limit' => 0], 'facet_all_values', $id, $alter);
         $this->positions[$id]['all'] = count($queries);
       }
       if (!empty($facet['missing'])) {
         $missing = sprintf('(%1$s NOT EXISTS OR %1$s IS NULL)', $field);
-        $queries[] = $base + [
-          'filter' => self::combine([$this->filters[$id], $missing]),
-          'page' => 1,
-          'hitsPerPage' => 0,
-        ];
+        $params = $base + ['filter' => self::combine([$this->filters[$id], $missing])];
+        $queries[] = $this->prepare($params, ['page' => 1, 'hitsPerPage' => 0], 'facet_missing', $id, $alter);
         $this->positions[$id]['missing'] = count($queries);
       }
     }
     return $queries;
+  }
+
+  /**
+   * Lets the alter callback change a query, then restores the fixed keys.
+   */
+  protected function prepare(array $params, array $fixed, string $purpose, string $id, ?callable $alter): array {
+    if ($alter) {
+      $alter($params, ['query' => $purpose, 'facet' => $id]);
+    }
+    unset($params['offset'], $params['limit'], $params['page'], $params['hitsPerPage'], $params['facets']);
+    return ['indexUid' => $params['indexUid'] ?? ''] + $fixed + $params;
   }
 
   /**
