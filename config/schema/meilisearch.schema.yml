@@ -26,3 +26,26 @@ plugin.plugin_configuration.search_api_backend.meilisearch:
     max_total_hits:
       type: integer
       label: 'Maximum number of results'
+
+plugin.plugin_configuration.search_api_processor.meilisearch_highlighting:
+  type: search_api.default_processor_configuration
+  label: 'Meilisearch highlighting processor configuration'
+  mapping:
+    fields:
+      type: sequence
+      label: 'Fields to build the excerpt from (empty: all fulltext fields)'
+      sequence:
+        type: string
+        label: 'Field ID'
+    pre_tag:
+      type: string
+      label: 'Highlight opening tag'
+    post_tag:
+      type: string
+      label: 'Highlight closing tag'
+    crop_length:
+      type: integer
+      label: 'Excerpt length, in words'
+    crop_marker:
+      type: string
+      label: 'Crop marker'
