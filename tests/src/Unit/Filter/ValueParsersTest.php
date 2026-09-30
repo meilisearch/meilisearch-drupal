@@ -11,8 +11,14 @@ use Drupal\search_api\IndexInterface;
 use Drupal\search_api\Query\Condition;
 use PHPUnit\Framework\TestCase;
 
+/**
+ * Tests the value-based condition parsers.
+ */
 class ValueParsersTest extends TestCase {
 
+  /**
+   * Tests scalar equals.
+   */
   public function testScalarEquals(): void {
     $parser = new ScalarValueParser();
     $condition = new Condition('title', 'Hello', '=');
@@ -22,6 +28,9 @@ class ValueParsersTest extends TestCase {
     $this->assertSame('title = "Hello"', $parser->parse($condition, $index));
   }
 
+  /**
+   * Tests scalar greater than.
+   */
   public function testScalarGreaterThan(): void {
     $parser = new ScalarValueParser();
     $condition = new Condition('count', 5, '>');
@@ -30,6 +39,9 @@ class ValueParsersTest extends TestCase {
     $this->assertSame('count > 5', $parser->parse($condition, $index));
   }
 
+  /**
+   * Tests scalar quotes strings escapes double.
+   */
   public function testScalarQuotesStringsEscapesDouble(): void {
     $parser = new ScalarValueParser();
     $condition = new Condition('title', 'He said "hi"', '=');
@@ -38,6 +50,9 @@ class ValueParsersTest extends TestCase {
     $this->assertSame('title = "He said \\"hi\\""', $parser->parse($condition, $index));
   }
 
+  /**
+   * Tests boolean value.
+   */
   public function testBooleanValue(): void {
     $parser = new BooleanValueParser();
     $condition = new Condition('published', TRUE, '=');
@@ -50,6 +65,9 @@ class ValueParsersTest extends TestCase {
     $this->assertSame('published = false', $parser->parse($condition, $index));
   }
 
+  /**
+   * Tests null is.
+   */
   public function testNullIs(): void {
     $parser = new NullValueParser();
     $condition = new Condition('field', NULL, '=');

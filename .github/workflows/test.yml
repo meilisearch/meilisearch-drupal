@@ -16,6 +16,9 @@ jobs:
             meilisearch: 'v1.54'
           - drupal: '^10.3'
             meilisearch: 'v1.54'
+          # Oldest supported Meilisearch.
+          - drupal: '^11'
+            meilisearch: 'v1.16'
     env:
       MEILISEARCH_VERSION: ${{ matrix.meilisearch }}
     steps:

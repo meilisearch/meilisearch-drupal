@@ -65,9 +65,22 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   }
 
   /**
+   * Skips the test when the instance does not return search metadata.
+   *
+   * Older Meilisearch versions ignore the Meili-Include-Metadata header.
+   */
+  protected function requireSearchMetadata(): void {
+    $results = Index::load('meilisearch_test_index')->query()->keys('foo')->execute();
+    if ($results->getExtraData('meilisearch_query_uid') === NULL) {
+      $this->markTestSkipped('This Meilisearch version does not return search metadata.');
+    }
+  }
+
+  /**
    * Searches ask Meilisearch for their query UID.
    */
   public function testSearchesReturnTheQueryUid(): void {
+    $this->requireSearchMetadata();
     $results = Index::load('meilisearch_test_index')->query()->keys('foo')->execute();
     $this->assertMatchesRegularExpression('/^[0-9a-f-]{36}$/', (string) $results->getExtraData('meilisearch_query_uid'));
   }
@@ -76,6 +89,7 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
    * Result rows carry what the click tracker needs, and are not cached.
    */
   public function testViewRowsCarryAnalyticsAttributes(): void {
+    $this->requireSearchMetadata();
     $view = Views::getView('meilisearch_test_view');
     $build = $view->preview();
     $html = (string) \Drupal::service('renderer')->renderRoot($build);

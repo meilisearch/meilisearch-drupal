@@ -153,6 +153,9 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
     catch (TimeOutException $e) {
       throw new MeilisearchApiException(sprintf('Meilisearch task %d did not finish within %d ms.', $taskUid, $timeoutMs), 'task_timeout', $e);
     }
+    // The SDK only declares TimeOutException, but polling the task can fail
+    // with API and network errors too.
+    // @phpstan-ignore catch.neverThrown
     catch (ExceptionInterface $e) {
       throw $this->convert($e);
     }
@@ -168,12 +171,10 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
   /**
    * Runs an SDK call, converting its exceptions.
    *
-   * @template T
-   *
-   * @param callable(): T $callback
+   * @param callable $callback
    *   The SDK call.
    *
-   * @return T
+   * @return mixed
    *   The result of the call.
    */
   protected function call(callable $callback): mixed {

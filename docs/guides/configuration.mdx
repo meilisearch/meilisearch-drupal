@@ -1,0 +1,32 @@
+---
+title: Server configuration
+---
+
+| Setting | Description |
+|---|---|
+| Meilisearch URL | Full URL including the port, for example `http://127.0.0.1:7700` or `https://ms-abc123.fra.meilisearch.io`. |
+| API key | See below. Leave empty when editing to keep the stored key. |
+| Index prefix | Prepended to Meilisearch index names (`prod_`, `staging_`) so several sites or environments can share an instance. Changing it requires re-indexing. |
+| Search mode | Keyword, hybrid or semantic. See [Semantic search](/guides/semantic-search). |
+| Matching strategy | How many query words must match: `last` (Meilisearch default), `all` or `frequency`. |
+| Maximum number of results | How many results a search can page through (`pagination.maxTotalHits`). Default 10,000. |
+
+## API key
+
+Create a dedicated key with these actions: `search`, `documents.*`, `indexes.*`, `settings.*`, `tasks.get`, `version`. Avoid the master key.
+
+To keep the key out of configuration exports, set it in `settings.php`:
+
+```php
+$config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');
+```
+
+The same works for the URL, so each environment points at its own instance.
+
+## What the module manages
+
+On every index save the module sends the searchable, filterable and sortable attributes, `pagination.maxTotalHits` and `faceting.maxValuesPerFacet`. When it creates an index it also puts the `sort` ranking rule first, so explicit sorts are strict. It never touches synonyms, stop words, typo tolerance or embedders, nor the ranking rules of existing indexes.
+
+## Discouraged processors
+
+Meilisearch tokenizes and normalizes text itself. The Search API processors *Ignore case*, *Stemmer*, *Stopwords*, *Tokenizer* and *Transliteration* would alter what it receives; Search API warns when they are enabled.

@@ -1,0 +1,8 @@
+---
+title: Semantic and hybrid search
+---
+
+1. Configure an embedder on the Meilisearch index (Cloud dashboard or [settings API](https://www.meilisearch.com/docs/reference/api/settings#embedders)). The index name is the index prefix followed by the Search API index machine name.
+2. On the server, set **Search mode** to *Hybrid* or *Semantic* and enter the embedder name.
+
+*Hybrid* mixes keyword and semantic results according to the **Semantic ratio** (0 is keyword only, 1 semantic only). *Semantic* uses a ratio of 1.

@@ -35,6 +35,8 @@ class MeilisearchApiServiceTest extends TestCase {
    *   Responses or exceptions, in order.
    * @param array $headers
    *   Extra headers for every request.
+   * @param string $url
+   *   The Meilisearch URL.
    */
   protected function api(array $responses, array $headers = [], string $url = 'http://meili.test:7700'): MeilisearchApiServiceInterface {
     $this->history = [];
@@ -55,7 +57,11 @@ class MeilisearchApiServiceTest extends TestCase {
    */
   public function testFailedTaskThrowsWithMeilisearchError(): void {
     $api = $this->api([
-      $this->json(['uid' => 7, 'status' => 'failed', 'error' => ['message' => 'Document has invalid _geo', 'code' => 'invalid_document_geo_field']]),
+      $this->json([
+        'uid' => 7,
+        'status' => 'failed',
+        'error' => ['message' => 'Document has invalid _geo', 'code' => 'invalid_document_geo_field'],
+      ]),
     ]);
     try {
       $api->waitForTask(7);
@@ -99,7 +105,12 @@ class MeilisearchApiServiceTest extends TestCase {
    */
   public function testApiErrorKeepsErrorCode(): void {
     $api = $this->api([
-      $this->json(['message' => 'Attribute `x` is not filterable.', 'code' => 'invalid_search_filter', 'type' => 'invalid_request', 'link' => ''], 400),
+      $this->json([
+        'message' => 'Attribute `x` is not filterable.',
+        'code' => 'invalid_search_filter',
+        'type' => 'invalid_request',
+        'link' => '',
+      ], 400),
     ]);
     try {
       $api->search('idx', 'foo', ['filter' => 'x = 1']);

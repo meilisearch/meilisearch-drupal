@@ -1,0 +1,26 @@
+---
+title: Installation
+---
+
+## Requirements
+
+| | Version |
+|---|---|
+| Drupal | 10.3 or 11 |
+| PHP | 8.1 or later |
+| Search API | 1.39 or later |
+| Meilisearch | 1.16 or later, or Meilisearch Cloud (click analytics need Cloud) |
+
+## Install
+
+```bash
+composer require drupal/meilisearch
+drush en meilisearch -y
+```
+
+Optional:
+
+```bash
+composer require drupal/facets         # faceted search
+drush en meilisearch_analytics -y      # click analytics (Meilisearch Cloud)
+```

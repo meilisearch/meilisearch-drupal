@@ -123,7 +123,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   public function getApi(): MeilisearchApiServiceInterface {
     if ($this->api === NULL) {
       $headers = [];
-      $server = $this->server ?? NULL;
+      $server = $this->getServer();
       $this->moduleHandler->alter('meilisearch_request_headers', $headers, $server);
       $this->api = $this->apiFactory->create((string) $this->configuration['url'], (string) $this->configuration['api_key'], $headers);
     }
@@ -153,8 +153,9 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     $form['api_key'] = [
       '#type' => 'password',
       '#title' => $this->t('API key'),
-      '#description' => $this->t('An API key with the <em>search</em>, <em>documents.*</em>, <em>indexes.*</em>, <em>settings.*</em>, <em>tasks.get</em> and <em>version</em> actions. Avoid the master key. @state To keep the key out of exported configuration, set it in settings.php: <code>$config[\'search_api.server.SERVER_ID\'][\'backend_config\'][\'api_key\'] = getenv(\'MEILISEARCH_API_KEY\');</code>', [
+      '#description' => $this->t('An API key with the <em>search</em>, <em>documents.*</em>, <em>indexes.*</em>, <em>settings.*</em>, <em>tasks.get</em> and <em>version</em> actions. Avoid the master key. @state To keep the key out of exported configuration, set it in settings.php: <code>@snippet</code>', [
         '@state' => $this->configuration['api_key'] !== '' ? $this->t('A key is stored; leave empty to keep it.') : '',
+        '@snippet' => "\$config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');",
       ]),
     ];
 
@@ -252,7 +253,10 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       $api->version();
     }
     catch (MeilisearchApiException $e) {
-      $this->messenger->addWarning($this->t('Could not connect to Meilisearch at %url: @message', ['%url' => $url, '@message' => $e->getMessage()]));
+      $this->messenger->addWarning($this->t('Could not connect to Meilisearch at %url: @message', [
+        '%url' => $url,
+        '@message' => $e->getMessage(),
+      ]));
     }
   }
 
@@ -290,7 +294,11 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       $info[] = ['label' => $this->t('Meilisearch version'), 'info' => $version['pkgVersion'] ?? $this->t('Unknown')];
     }
     catch (MeilisearchApiException $e) {
-      $info[] = ['label' => $this->t('Connection'), 'info' => $this->t('Failed: @message', ['@message' => $e->getMessage()]), 'status' => 'error'];
+      $info[] = [
+        'label' => $this->t('Connection'),
+        'info' => $this->t('Failed: @message', ['@message' => $e->getMessage()]),
+        'status' => 'error',
+      ];
     }
     return $info;
   }
@@ -354,6 +362,8 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
    */
   public function updateIndex(IndexInterface $index): void {
     $this->pushSettings($index);
+    // Drupal 11.2 added getOriginal(); earlier versions use the property.
+    // @phpstan-ignore function.alreadyNarrowedType
     $original = method_exists($index, 'getOriginal') ? $index->getOriginal() : ($index->original ?? NULL);
     if ($original instanceof IndexInterface && $this->fieldSignature($original) !== $this->fieldSignature($index)) {
       $index->reindex();
@@ -430,7 +440,8 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     $results = $query->getResults();
 
     $params = $this->buildSearchParams($query);
-    $facets = new FacetBuilder($query, $this->filterBuilder, $params, [$this->languageFilter($query), $this->locationFilter($query)]);
+    $extra_filters = [$this->languageFilter($query), $this->locationFilter($query)];
+    $facets = new FacetBuilder($query, $this->filterBuilder, $params, $extra_filters);
     $params = $facets->alterMainQuery($params);
     $this->moduleHandler->alter('meilisearch_search_params', $params, $query);
 
@@ -733,6 +744,8 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
    */
   public function __wakeup(): void {
     parent::__wakeup();
+    // Services cannot be injected into an unserialized plugin.
+    // @phpstan-ignore globalDrupalDependencyInjection.useDependencyInjection
     $container = \Drupal::getContainer();
     $this->apiFactory = $container->get('meilisearch.api_factory');
     $this->documentConverter = $container->get('meilisearch.document_converter');

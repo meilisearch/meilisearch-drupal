@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Drupal\meilisearch\Api;
 
 /**
- * Thrown for every Meilisearch failure: API errors, network errors, timeouts
- * and tasks that finished with the "failed" status.
+ * Thrown for every Meilisearch failure.
+ *
+ * Covers API errors, network errors, timeouts and tasks that finished with
+ * the "failed" status.
  */
 class MeilisearchApiException extends \RuntimeException {
 

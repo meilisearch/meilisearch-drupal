@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\meilisearch\Kernel;
 
+use Drupal\meilisearch\Plugin\search_api\backend\MeilisearchBackend;
+use Drupal\search_api\Entity\Server;
 use Meilisearch\Client;
 use Meilisearch\Contracts\IndexesQuery;
 
@@ -42,6 +44,15 @@ trait MeilisearchTestTrait {
         'index_prefix' => $this->meilisearchPrefix . $i . '_',
       ];
     }
+  }
+
+  /**
+   * Returns the Meilisearch backend of a server.
+   */
+  protected function meilisearchBackend(string $server_id = 'meilisearch_test_server'): MeilisearchBackend {
+    $backend = Server::load($server_id)->getBackend();
+    assert($backend instanceof MeilisearchBackend);
+    return $backend;
   }
 
   /**

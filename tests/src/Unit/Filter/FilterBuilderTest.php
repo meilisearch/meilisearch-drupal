@@ -36,6 +36,9 @@ class FilterBuilderTest extends TestCase {
     'created' => 'date',
   ];
 
+  /**
+   * Tests single condition.
+   */
   public function testSingleCondition(): void {
     $group = new ConditionGroup('AND');
     $group->addCondition('title', 'Hello', '=');
@@ -43,6 +46,9 @@ class FilterBuilderTest extends TestCase {
     $this->assertSame('title = "Hello"', $this->build($group));
   }
 
+  /**
+   * Tests and group.
+   */
   public function testAndGroup(): void {
     $group = new ConditionGroup('AND');
     $group->addCondition('title', 'Hello', '=');
@@ -51,6 +57,9 @@ class FilterBuilderTest extends TestCase {
     $this->assertSame('(title = "Hello" AND count > 5)', $this->build($group));
   }
 
+  /**
+   * Tests or group.
+   */
   public function testOrGroup(): void {
     $group = new ConditionGroup('OR');
     $group->addCondition('genre', 'action', '=');
@@ -59,6 +68,9 @@ class FilterBuilderTest extends TestCase {
     $this->assertSame('(genre = "action" OR genre = "comedy")', $this->build($group));
   }
 
+  /**
+   * Tests nested groups.
+   */
   public function testNestedGroups(): void {
     $inner = new ConditionGroup('OR');
     $inner->addCondition('genre', 'action', '=');
@@ -70,6 +82,9 @@ class FilterBuilderTest extends TestCase {
     $this->assertSame('((genre = "action" OR genre = "comedy") AND rating >= 4)', $this->build($outer));
   }
 
+  /**
+   * Tests empty group returns null.
+   */
   public function testEmptyGroupReturnsNull(): void {
     $this->assertNull($this->build(new ConditionGroup('AND')));
   }

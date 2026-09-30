@@ -40,12 +40,14 @@ class SearchKeysTest extends TestCase {
    * @covers ::toMeilisearch
    */
   public function testNegatedKeysUseMeilisearchNegation(): void {
+    // phpcs:disable Drupal.Arrays.Array.ArrayIndentation,Squiz.Arrays.ArrayDeclaration.NoKeySpecified
     $keys = [
       '#conjunction' => 'AND',
       'test',
       ['#conjunction' => 'OR', 'baz', 'foobar'],
       ['#conjunction' => 'OR', '#negation' => TRUE, 'bar', 'two words'],
     ];
+    // phpcs:enable
     $this->assertSame('test baz foobar -bar -"two words"', SearchKeys::toMeilisearch($keys));
     $this->assertSame('-foo', SearchKeys::toMeilisearch(['#conjunction' => 'AND', '#negation' => TRUE, 'foo']));
   }

@@ -31,7 +31,7 @@ class MeilisearchUtilsTest extends TestCase {
       'entity:foo/a_2Eb', 'entity:foo/a__b', 'entity:foo/é',
     ];
     $encoded = array_map([MeilisearchUtils::class, 'encodeDocumentId'], $ids);
-    $this->assertSame(count($ids), count(array_unique($encoded)));
+    $this->assertCount(count($ids), array_unique($encoded));
     foreach ($encoded as $value) {
       $this->assertMatchesRegularExpression('/^[A-Za-z0-9_-]+$/', $value);
     }

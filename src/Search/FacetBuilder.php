@@ -113,7 +113,8 @@ final class FacetBuilder {
    *   Multi-search queries. Position 0 is reserved for the main query.
    */
   public function extraQueries(string $uid): array {
-    $base = ['indexUid' => $uid] + array_intersect_key($this->params, array_flip(['q', 'hybrid', 'matchingStrategy', 'attributesToSearchOn']));
+    $shared = array_flip(['q', 'hybrid', 'matchingStrategy', 'attributesToSearchOn']);
+    $base = ['indexUid' => $uid] + array_intersect_key($this->params, $shared);
     $queries = [];
     foreach ($this->facets as $id => $facet) {
       $field = $facet['field'];
@@ -127,7 +128,11 @@ final class FacetBuilder {
       }
       if (!empty($facet['missing'])) {
         $missing = sprintf('(%1$s NOT EXISTS OR %1$s IS NULL)', $field);
-        $queries[] = $base + ['filter' => self::combine([$this->filters[$id], $missing]), 'page' => 1, 'hitsPerPage' => 0];
+        $queries[] = $base + [
+          'filter' => self::combine([$this->filters[$id], $missing]),
+          'page' => 1,
+          'hitsPerPage' => 0,
+        ];
         $this->positions[$id]['missing'] = count($queries);
       }
     }

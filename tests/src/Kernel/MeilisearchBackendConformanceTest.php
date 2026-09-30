@@ -57,7 +57,7 @@ class MeilisearchBackendConformanceTest extends BackendTestBase {
    * {@inheritdoc}
    */
   protected function checkServerBackend() {
-    $uid = $this->getServer()->getBackend()->getIndexUid($this->getIndex());
+    $uid = $this->meilisearchBackend($this->serverId)->getIndexUid($this->getIndex());
     $this->assertSame([$uid], $this->testIndexUids(), 'Adding the index created it in Meilisearch.');
     $settings = $this->meilisearchClient()->index($uid)->getSettings();
     $this->assertContains('search_api_language', $settings['filterableAttributes']);
@@ -72,6 +72,8 @@ class MeilisearchBackendConformanceTest extends BackendTestBase {
    * Same as the parent, with the expectations Meilisearch semantics change.
    */
   protected function searchSuccess() {
+    // Copied from Search API, keeping its style.
+    // phpcs:disable Squiz.Arrays.ArrayDeclaration.NoKeySpecified,DrupalPractice.General.LanguageNone.Und
     $results = $this->buildSearch('test')->range(1, 2)->execute();
     $this->assertEquals(4, $results->getResultCount(), 'Search for »test« returned correct number of results.');
     $this->assertEquals($this->getItemIds([2, 3]), array_keys($results->getResultItems()), 'Search for »test« returned correct result.');
@@ -209,6 +211,7 @@ class MeilisearchBackendConformanceTest extends BackendTestBase {
       ->sort('search_api_id', QueryInterface::SORT_DESC)
       ->execute();
     $this->assertResults([5, 4, 3, 2, 1], $results, 'Query with magic sorts');
+    // phpcs:enable
   }
 
   /**
@@ -316,7 +319,7 @@ class MeilisearchBackendConformanceTest extends BackendTestBase {
    * {@inheritdoc}
    */
   protected function checkModuleUninstall() {
-    $uid = $this->getServer()->getBackend()->getIndexUid($this->getIndex());
+    $uid = $this->meilisearchBackend($this->serverId)->getIndexUid($this->getIndex());
     $this->getIndex()->delete();
     $this->assertNotContains($uid, $this->testIndexUids(), 'Deleting the index removed it from Meilisearch.');
   }

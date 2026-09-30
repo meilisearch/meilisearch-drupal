@@ -1,0 +1,24 @@
+---
+title: Quickstart
+---
+
+<Steps>
+  <Step title="Run Meilisearch">
+    Use a [Meilisearch Cloud](https://cloud.meilisearch.com) project, or run one locally:
+
+    ```bash
+    docker run -p 7700:7700 -e MEILI_MASTER_KEY=change-me getmeili/meilisearch:v1.54
+    ```
+  </Step>
+  <Step title="Add a server">
+    Go to **Configuration → Search and metadata → Search API → Add server**, pick the **Meilisearch** backend and enter the URL (with port) and an API key.
+  </Step>
+  <Step title="Add an index">
+    Add an index on that server, choose the content to index and its fields. Fulltext fields are searched, most boosted first; every field can be filtered and sorted on.
+  </Step>
+  <Step title="Index and search">
+    Click **Index now**, then build a view on the index with a fulltext filter.
+  </Step>
+</Steps>
+
+<Tip>Keep the API key out of exported configuration: see [Configuration](/guides/configuration#api-key).</Tip>

@@ -1,0 +1,29 @@
+---
+title: Hooks
+---
+
+See `meilisearch.api.php`.
+
+## hook_meilisearch_search_params_alter()
+
+Alter the [search parameters](https://www.meilisearch.com/docs/reference/api/search) of a query before it is sent.
+
+```php
+function mymodule_meilisearch_search_params_alter(array &$params, \Drupal\search_api\Query\QueryInterface $query): void {
+  $params['rankingScoreThreshold'] = 0.2;
+}
+```
+
+## hook_meilisearch_request_headers_alter()
+
+Add HTTP headers to every request of a server.
+
+```php
+function mymodule_meilisearch_request_headers_alter(array &$headers, ?\Drupal\search_api\ServerInterface $server): void {
+  $headers['X-Custom'] = 'value';
+}
+```
+
+## Condition parsers
+
+Services tagged `meilisearch.condition_parser` (implementing `ConditionParserInterface`) translate Search API conditions to filter expressions; higher priorities are tried first.

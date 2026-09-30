@@ -1,60 +1,75 @@
 # Meilisearch for Drupal
 
-Official Meilisearch backend for the Drupal Search API.
+The official [Meilisearch](https://www.meilisearch.com) backend for Drupal's [Search API](https://www.drupal.org/project/search_api): self-hosted or Meilisearch Cloud, with Views, Facets and highlighting.
 
 ## Requirements
 
-- Drupal 9.3, 10, or 11
-- PHP 8.1+
-- A Meilisearch instance (self-hosted or Cloud) — v1.3.3+
+- Drupal 10.3 or 11, PHP 8.1+
+- Search API 1.39+
+- Meilisearch 1.16+ (self-hosted) or a Meilisearch Cloud project
 
 ## Installation
 
-```
+```bash
 composer require drupal/meilisearch
 drush en meilisearch -y
 ```
 
-## Features
-
-- Full-text search via Drupal Search API
-- Self-hosted and Meilisearch Cloud support (auto-detected)
-- Semantic and hybrid (keyword + vector) search with embedders
-- Geo search (`_geoRadius`, `_geoBoundingBox`)
-- Highlighting and snippet cropping (per-query)
-
-> **Server-level settings** (synonyms, stop words, ranking rules, embedders) are
-> managed in the **Meilisearch Cloud dashboard** or via the Meilisearch CLI/HTTP
-> API. The Drupal admin UI intentionally does not duplicate that surface — when
-> you connect a Cloud server, the configuration form links straight to the
-> dashboard for those settings.
-
-### Optional submodules
-
-- **`meilisearch_facets`** — faceted search via `drupal/facets`
-- **`meilisearch_analytics`** — click & conversion event tracking
-
 ## Quick start
 
-1. Enable the module.
-2. Go to **Configuration → Search API** and add a server with Meilisearch as the backend.
-3. Fill in the connection details (URL, port or Cloud URL, API key).
-4. Create an index, pick fields to index, and run indexing.
+1. **Configuration → Search and metadata → Search API → Add server**: pick the **Meilisearch** backend, enter the URL with its port (`http://127.0.0.1:7700`, or your Cloud project URL) and an API key.
+2. Add an index on that server, pick content and fields, then **Index now**.
+3. Build a view on the index with a fulltext filter.
 
-## Deployment guides
+Keep the API key out of configuration exports by setting it in `settings.php`:
 
-- [Docker Compose](docs/docker-compose-setup.md)
-- [DDEV](docs/ddev-setup.md)
-- [Meilisearch Cloud](docs/cloud-setup.md)
+```php
+$config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');
+```
 
-## Architecture
+Use a dedicated key with the `search`, `documents.*`, `indexes.*`, `settings.*`, `tasks.get` and `version` actions rather than the master key.
 
-| Layer | Class |
-|-------|-------|
-| Search API backend | `MeilisearchBackend` |
-| API wrapper | `MeilisearchApiService` |
-| Document conversion | `DocumentConverter` |
-| Filter translation | `FilterBuilder` + condition parsers |
+## Features
+
+- Typo-tolerant, prefix-matching full-text search; keyword, hybrid or semantic mode
+- Every Search API condition, including language (`setLanguages()`) and datasource filters
+- Facets ([Facets](https://www.drupal.org/project/facets)): limits, minimum counts, missing values, OR facets
+- Highlighted, cropped and escaped excerpts (*Meilisearch highlighting* processor)
+- Location search with [Search API Location](https://www.drupal.org/project/search_api_location)
+- Exact result counts, ranking scores, magic-field sorts
+- Index prefixes, so sites and environments can share one instance
+- `meilisearch_analytics` submodule: click analytics on Meilisearch Cloud
+- `hook_meilisearch_search_params_alter()` and `hook_meilisearch_request_headers_alter()`
+
+Synonyms, stop words, ranking rules and embedders are Meilisearch settings: manage them in the Cloud dashboard, the CLI or the API. The module only sends the attribute lists, pagination and faceting limits, and makes `sort` the first ranking rule of the indexes it creates so explicit sorts are strict.
+
+## How searches differ from the Database backend
+
+- No boolean operators in keywords: parsed keys are flattened, the matching strategy decides how many words must match, negated keys become `-word`.
+- The last word matches as a prefix and typos are tolerated.
+- Conditions and facets on fulltext fields use whole field values.
+- Exact conditions on string values over about 250 bytes cannot match.
+- Random sorting is not supported; "relevance, then X" with keywords is relevance order.
+
+Details: [`docs/reference/search-behavior.mdx`](docs/reference/search-behavior.mdx).
+
+## Documentation
+
+The `docs/` directory is a [Mintlify](https://mintlify.com) site:
+
+```bash
+cd docs && npx mintlify dev
+```
+
+## Development
+
+Tests run against a real Meilisearch, including Search API's backend conformance suite:
+
+```bash
+scripts/test.sh
+```
+
+See [`docs/reference/development.mdx`](docs/reference/development.mdx).
 
 ## License
 

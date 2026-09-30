@@ -106,9 +106,10 @@ class DocumentConverterTest extends TestCase {
   }
 
   /**
-   * Unparseable dates must not surface as FALSE/0 in the indexed document —
-   * Meilisearch would reject or silently mis-index such values. The field is
-   * omitted entirely instead.
+   * Tests that unparseable dates are dropped.
+   *
+   * They must not surface as FALSE/0 in the indexed document: Meilisearch
+   * would reject or silently mis-index such values.
    *
    * @covers ::convertToDocuments
    */
@@ -129,6 +130,9 @@ class DocumentConverterTest extends TestCase {
     $this->assertSame(7, $docs[0]['bad_int']);
   }
 
+  /**
+   * Builds a Search API item mock with the given fields.
+   */
   private function buildItem(string $itemId, array $fields): ItemInterface {
     $item = $this->createMock(ItemInterface::class);
     $item->method('getId')->willReturn($itemId);

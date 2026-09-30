@@ -1,0 +1,11 @@
+---
+title: Meilisearch Cloud
+---
+
+1. Create a project on [Meilisearch Cloud](https://cloud.meilisearch.com) and copy its URL.
+2. Create an API key with the actions listed in [Configuration](/guides/configuration#api-key).
+3. Add a Search API server with the project URL (no port) and the key.
+
+The server page shows *Meilisearch Cloud: Yes* and the engine version, and the edit form links to the Cloud dashboard, where synonyms, stop words, ranking rules and embedders are managed.
+
+One project can serve several environments: give each server its own [index prefix](/guides/configuration).

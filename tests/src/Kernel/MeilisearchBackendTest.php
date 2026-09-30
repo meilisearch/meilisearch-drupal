@@ -102,7 +102,7 @@ class MeilisearchBackendTest extends KernelTestBase {
    */
   public function testFailedIndexingTaskKeepsItemsPending(): void {
     $index = Index::load($this->indexId);
-    $uid = $index->getServerInstance()->getBackend()->getIndexUid($index);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
     // Recreate the Meilisearch index with a different primary key, so adding
     // documents with ours fails asynchronously.
     $client = $this->meilisearchClient();
@@ -150,7 +150,7 @@ class MeilisearchBackendTest extends KernelTestBase {
    * Submitting the server form with an empty key keeps the stored key.
    */
   public function testEmptyApiKeyKeepsStoredKey(): void {
-    $backend = Server::load('meilisearch_test_server')->getBackend();
+    $backend = $this->meilisearchBackend();
     $backend->setConfiguration(['api_key' => 'stored-secret'] + $backend->getConfiguration());
 
     $form_state = new FormState();
