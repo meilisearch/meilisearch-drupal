@@ -4,119 +4,118 @@ declare(strict_types=1);
 
 namespace Drupal\meilisearch\Api;
 
-use Meilisearch\Client;
-use Meilisearch\Contracts\IndexesResults;
-use Meilisearch\Endpoints\Indexes;
-use Meilisearch\Search\FacetSearchResult;
-use Meilisearch\Search\SearchResult;
-
 /**
- * Interface for the Meilisearch API service.
+ * Talks to one Meilisearch instance.
+ *
+ * Every method throws \Drupal\meilisearch\Api\MeilisearchApiException on any
+ * failure, including network errors and timeouts.
  */
 interface MeilisearchApiServiceInterface {
 
   /**
-   * Sets the Meilisearch server URL.
+   * How long to wait for a task by default, in milliseconds.
    */
-  public function setUrl(string $url): void;
+  public const TASK_TIMEOUT = 60000;
 
   /**
-   * Sets the API key.
+   * Returns the URL of the instance.
    */
-  public function setApiKey(string $key): void;
+  public function getUrl(): string;
 
   /**
-   * Returns the underlying Meilisearch client.
-   */
-  public function connection(): Client;
-
-  /**
-   * Pings the server.
-   */
-  public function ping(): bool;
-
-  /**
-   * Returns server version info.
-   */
-  public function version(): array;
-
-  /**
-   * Returns TRUE if connected to Meilisearch Cloud.
+   * Returns TRUE if the instance is hosted on Meilisearch Cloud.
    */
   public function isCloud(): bool;
 
   /**
-   * Creates an index.
-   */
-  public function createIndex(string $indexUid): array;
-
-  /**
-   * Returns an index instance.
-   */
-  public function getIndex(string $indexUid): Indexes;
-
-  /**
-   * Lists all indexes.
-   */
-  public function listIndexes(): IndexesResults;
-
-  /**
-   * Deletes an index.
-   */
-  public function deleteIndex(string $indexUid): array;
-
-  /**
-   * Adds documents to an index.
+   * Returns TRUE if the instance answers its health check.
    *
-   * @param string $indexUid
-   *   Index UID.
-   * @param array $documents
-   *   Documents to index.
+   * Never throws.
+   */
+  public function ping(): bool;
+
+  /**
+   * Returns the version information of the instance.
+   */
+  public function version(): array;
+
+  /**
+   * Creates an index. Returns the enqueued task.
+   */
+  public function createIndex(string $uid, string $primaryKey): array;
+
+  /**
+   * Deletes an index. Returns the enqueued task.
+   */
+  public function deleteIndex(string $uid): array;
+
+  /**
+   * Updates the settings of an index. Returns the enqueued task.
+   */
+  public function updateSettings(string $uid, array $settings): array;
+
+  /**
+   * Adds or replaces documents. Returns the enqueued task.
+   */
+  public function addDocuments(string $uid, array $documents, string $primaryKey): array;
+
+  /**
+   * Deletes documents by primary key. Returns the enqueued task.
    *
-   * @return array
-   *   Task info (includes taskUid).
+   * @param string $uid
+   *   The index UID.
+   * @param string[] $ids
+   *   The primary key values.
    */
-  public function addDocuments(string $indexUid, array $documents): array;
+  public function deleteDocuments(string $uid, array $ids): array;
 
   /**
-   * Deletes specific documents.
+   * Deletes the documents matching a filter. Returns the enqueued task.
    */
-  public function deleteDocuments(string $indexUid, array $ids): array;
+  public function deleteDocumentsByFilter(string $uid, string $filter): array;
 
   /**
-   * Deletes all documents from an index.
+   * Deletes all documents of an index. Returns the enqueued task.
    */
-  public function deleteAllDocuments(string $indexUid): array;
+  public function deleteAllDocuments(string $uid): array;
 
   /**
-   * Runs a search.
+   * Searches an index and returns the raw Meilisearch response.
    */
-  public function search(string $indexUid, string $query, array $options = []): SearchResult;
+  public function search(string $uid, string $query, array $params): array;
 
   /**
-   * Runs a facet search.
+   * Runs several searches in one request.
+   *
+   * @param array[] $queries
+   *   Search parameter arrays, each including "indexUid".
+   *
+   * @return array[]
+   *   The raw responses, in the order of the queries.
    */
-  public function searchFacets(string $indexUid, string $facetName, ?string $facetQuery = NULL, ?array $filter = NULL, ?string $query = NULL): FacetSearchResult;
+  public function multiSearch(array $queries): array;
 
   /**
-   * Gets all settings for an index.
+   * Sends an analytics event (Meilisearch Cloud only).
+   *
+   * @see https://www.meilisearch.com/docs/capabilities/analytics/advanced/events_endpoint
    */
-  public function getSettings(string $indexUid): array;
+  public function sendEvent(array $event): void;
 
   /**
-   * Updates settings on an index (bulk).
-   */
-  public function updateSettings(string $indexUid, array $settings): array;
-
-  /**
-   * Waits for a task to complete.
+   * Waits for a task to finish.
    *
    * @param int $taskUid
-   *   Task UID.
+   *   The task UID.
+   * @param int $timeoutMs
+   *   How long to wait, in milliseconds.
    *
    * @return array
-   *   Completed task data.
+   *   The finished task.
+   *
+   * @throws \Drupal\meilisearch\Api\MeilisearchApiException
+   *   When the task failed or did not finish in time.
    */
-  public function waitForTask(int $taskUid): array;
+  public function waitForTask(int $taskUid, int $timeoutMs = self::TASK_TIMEOUT): array;
 
 }

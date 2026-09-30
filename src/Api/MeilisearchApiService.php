@@ -4,188 +4,217 @@ declare(strict_types=1);
 
 namespace Drupal\meilisearch\Api;
 
-use Drupal\meilisearch\Client\MeilisearchClientFactoryInterface;
+use GuzzleHttp\ClientInterface;
+use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Exception\RequestException;
 use Meilisearch\Client;
-use Meilisearch\Contracts\FacetSearchQuery;
-use Meilisearch\Contracts\IndexesResults;
-use Meilisearch\Endpoints\Indexes;
 use Meilisearch\Exceptions\ApiException;
-use Meilisearch\Search\FacetSearchResult;
-use Meilisearch\Search\SearchResult;
+use Meilisearch\Exceptions\ExceptionInterface;
+use Meilisearch\Exceptions\TimeOutException;
 
 /**
- * Service wrapping the Meilisearch PHP client.
+ * Wraps the Meilisearch PHP client for one instance.
+ *
+ * Create instances with \Drupal\meilisearch\Api\MeilisearchApiFactory.
  */
 class MeilisearchApiService implements MeilisearchApiServiceInterface {
 
-  protected MeilisearchClientFactoryInterface $clientFactory;
-  protected string $url = '';
-  protected string $apiKey = '';
-  protected ?Client $client = NULL;
+  /**
+   * Constructs a MeilisearchApiService.
+   *
+   * @param \Meilisearch\Client $client
+   *   The Meilisearch client.
+   * @param \GuzzleHttp\ClientInterface $http
+   *   The HTTP client the Meilisearch client uses, for routes it lacks.
+   * @param string $url
+   *   The instance URL, without trailing slash.
+   * @param string $apiKey
+   *   The API key.
+   */
+  public function __construct(
+    protected Client $client,
+    protected ClientInterface $http,
+    protected string $url,
+    protected string $apiKey,
+  ) {}
 
-  public function __construct(MeilisearchClientFactoryInterface $clientFactory) {
-    $this->clientFactory = $clientFactory;
+  /**
+   * {@inheritdoc}
+   */
+  public function getUrl(): string {
+    return $this->url;
   }
 
-  public function setUrl(string $url): void {
-    // Strip trailing slash.
-    $this->url = rtrim($url, '/');
-    // Invalidate cached client.
-    $this->client = NULL;
+  /**
+   * {@inheritdoc}
+   */
+  public function isCloud(): bool {
+    return (bool) preg_match('/(?:^|\.)meilisearch\.io$/i', (string) parse_url($this->url, PHP_URL_HOST));
   }
 
-  public function setApiKey(string $key): void {
-    $this->apiKey = $key;
-    $this->client = NULL;
-  }
-
-  public function connection(): Client {
-    if ($this->client === NULL) {
-      $this->client = $this->clientFactory->getInstance($this->url, $this->apiKey);
-    }
-    return $this->client;
-  }
-
+  /**
+   * {@inheritdoc}
+   */
   public function ping(): bool {
     try {
-      $this->connection()->health();
+      $this->client->health();
       return TRUE;
     }
-    catch (\Throwable $e) {
+    catch (\Throwable) {
       return FALSE;
     }
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function version(): array {
+    return $this->call(fn() => $this->client->version());
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function createIndex(string $uid, string $primaryKey): array {
+    return $this->call(fn() => $this->client->createIndex($uid, ['primaryKey' => $primaryKey]));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function deleteIndex(string $uid): array {
+    return $this->call(fn() => $this->client->deleteIndex($uid));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function updateSettings(string $uid, array $settings): array {
+    return $this->call(fn() => $this->client->index($uid)->updateSettings($settings));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function addDocuments(string $uid, array $documents, string $primaryKey): array {
+    return $this->call(fn() => $this->client->index($uid)->addDocuments($documents, $primaryKey));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function deleteDocuments(string $uid, array $ids): array {
+    return $this->call(fn() => $this->client->index($uid)->deleteDocuments(array_values($ids)));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function deleteDocumentsByFilter(string $uid, string $filter): array {
+    return $this->call(fn() => $this->client->index($uid)->deleteDocuments(['filter' => $filter]));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function deleteAllDocuments(string $uid): array {
+    return $this->call(fn() => $this->client->index($uid)->deleteAllDocuments());
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function search(string $uid, string $query, array $params): array {
+    return $this->call(fn() => $this->client->index($uid)->search($query, $params, ['raw' => TRUE]));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function multiSearch(array $queries): array {
+    $response = $this->post('multi-search', ['queries' => array_values($queries)]);
+    return $response['results'] ?? [];
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function sendEvent(array $event): void {
+    $this->post('events', $event);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function waitForTask(int $taskUid, int $timeoutMs = self::TASK_TIMEOUT): array {
     try {
-      return $this->connection()->version();
+      $task = $this->client->waitForTask($taskUid, $timeoutMs, min(100, $timeoutMs));
     }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
+    catch (TimeOutException $e) {
+      throw new MeilisearchApiException(sprintf('Meilisearch task %d did not finish within %d ms.', $taskUid, $timeoutMs), 'task_timeout', $e);
+    }
+    catch (ExceptionInterface $e) {
+      throw $this->convert($e);
+    }
+    if (($task['status'] ?? NULL) === 'failed') {
+      throw new MeilisearchApiException(
+        sprintf('Meilisearch task %d failed: %s', $taskUid, $task['error']['message'] ?? 'unknown error'),
+        $task['error']['code'] ?? NULL,
+      );
+    }
+    return $task;
+  }
+
+  /**
+   * Runs an SDK call, converting its exceptions.
+   *
+   * @template T
+   *
+   * @param callable(): T $callback
+   *   The SDK call.
+   *
+   * @return T
+   *   The result of the call.
+   */
+  protected function call(callable $callback): mixed {
+    try {
+      return $callback();
+    }
+    catch (ExceptionInterface $e) {
+      throw $this->convert($e);
     }
   }
 
-  public function isCloud(): bool {
-    return (bool) preg_match('/(?:^|\.)meilisearch\.io$/i', parse_url($this->url, PHP_URL_HOST) ?? '');
+  /**
+   * Converts an SDK exception.
+   */
+  protected function convert(ExceptionInterface $e): MeilisearchApiException {
+    if ($e instanceof ApiException) {
+      return new MeilisearchApiException($e->getMessage(), $e->errorCode, $e);
+    }
+    return new MeilisearchApiException($e->getMessage(), NULL, $e);
   }
 
-  public function createIndex(string $indexUid): array {
+  /**
+   * Sends a JSON POST request for routes the SDK does not cover.
+   */
+  protected function post(string $path, array $body): array {
+    $options = ['json' => $body, 'headers' => []];
+    if ($this->apiKey !== '') {
+      $options['headers']['Authorization'] = 'Bearer ' . $this->apiKey;
+    }
     try {
-      return $this->connection()->createIndex($indexUid);
+      $response = $this->http->request('POST', $path, $options);
     }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
+    catch (RequestException $e) {
+      $error = $e->hasResponse() ? json_decode((string) $e->getResponse()->getBody(), TRUE) : NULL;
+      throw new MeilisearchApiException($error['message'] ?? $e->getMessage(), $error['code'] ?? NULL, $e);
     }
-  }
-
-  public function getIndex(string $indexUid): Indexes {
-    try {
-      return $this->connection()->index($indexUid);
+    catch (GuzzleException $e) {
+      throw new MeilisearchApiException($e->getMessage(), NULL, $e);
     }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function listIndexes(): IndexesResults {
-    try {
-      return $this->connection()->getIndexes();
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function deleteIndex(string $indexUid): array {
-    try {
-      return $this->connection()->deleteIndex($indexUid);
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function addDocuments(string $indexUid, array $documents): array {
-    try {
-      return $this->connection()->index($indexUid)->addDocuments($documents, 'id');
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function deleteDocuments(string $indexUid, array $ids): array {
-    try {
-      return $this->connection()->index($indexUid)->deleteDocuments($ids);
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function deleteAllDocuments(string $indexUid): array {
-    try {
-      return $this->connection()->index($indexUid)->deleteAllDocuments();
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function search(string $indexUid, string $query, array $options = []): SearchResult {
-    try {
-      return $this->connection()->index($indexUid)->search($query, $options);
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function searchFacets(string $indexUid, string $facetName, ?string $facetQuery = NULL, ?array $filter = NULL, ?string $query = NULL): FacetSearchResult {
-    try {
-      $queryObj = (new FacetSearchQuery())
-        ->setFacetName($facetName);
-      if ($facetQuery !== NULL) {
-        $queryObj->setFacetQuery($facetQuery);
-      }
-      if ($filter !== NULL) {
-        $queryObj->setFilter($filter);
-      }
-      if ($query !== NULL) {
-        $queryObj->setQuery($query);
-      }
-      return $this->connection()->index($indexUid)->facetSearch($queryObj);
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function getSettings(string $indexUid): array {
-    try {
-      return $this->connection()->index($indexUid)->getSettings();
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function updateSettings(string $indexUid, array $settings): array {
-    try {
-      return $this->connection()->index($indexUid)->updateSettings($settings);
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
-  }
-
-  public function waitForTask(int $taskUid): array {
-    try {
-      return $this->connection()->waitForTask($taskUid);
-    }
-    catch (ApiException $e) {
-      throw new MeilisearchApiException($e->getMessage(), $e->getCode(), $e);
-    }
+    $decoded = json_decode((string) $response->getBody(), TRUE);
+    return is_array($decoded) ? $decoded : [];
   }
 
 }

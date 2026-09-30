@@ -4,9 +4,16 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\meilisearch\Unit\Api;
 
-use Drupal\meilisearch\Api\MeilisearchApiService;
-use Drupal\meilisearch\Client\MeilisearchClientFactoryInterface;
-use Meilisearch\Client;
+use Drupal\Core\Http\ClientFactory;
+use Drupal\meilisearch\Api\MeilisearchApiException;
+use Drupal\meilisearch\Api\MeilisearchApiFactory;
+use Drupal\meilisearch\Api\MeilisearchApiServiceInterface;
+use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -15,43 +22,143 @@ use PHPUnit\Framework\TestCase;
 class MeilisearchApiServiceTest extends TestCase {
 
   /**
-   * @covers ::isCloud
+   * Requests sent through the mocked HTTP client.
+   *
+   * @var array<int, array{request: \Psr\Http\Message\RequestInterface}>
    */
-  public function testIsCloudDetectsMeilisearchDomain(): void {
-    $factory = $this->createMock(MeilisearchClientFactoryInterface::class);
-    $service = new MeilisearchApiService($factory);
+  protected array $history = [];
 
-    $service->setUrl('https://ms-abc123.fra.meilisearch.io');
-    $this->assertTrue($service->isCloud());
-
-    $service->setUrl('https://meilisearch.io');
-    $this->assertTrue($service->isCloud(), 'Root meilisearch.io host should be detected as cloud.');
-
-    $service->setUrl('http://127.0.0.1:7700');
-    $this->assertFalse($service->isCloud());
-
-    $service->setUrl('https://evilmeilisearch.io');
-    $this->assertFalse($service->isCloud(), 'Confusable hostname must not be treated as cloud.');
+  /**
+   * Builds an API service whose HTTP layer answers with the given responses.
+   *
+   * @param array $responses
+   *   Responses or exceptions, in order.
+   * @param array $headers
+   *   Extra headers for every request.
+   */
+  protected function api(array $responses, array $headers = [], string $url = 'http://meili.test:7700'): MeilisearchApiServiceInterface {
+    $this->history = [];
+    $stack = HandlerStack::create(new MockHandler($responses));
+    $stack->push(Middleware::history($this->history));
+    return (new MeilisearchApiFactory(new ClientFactory($stack)))->create($url, 'secret', $headers);
   }
 
   /**
-   * @covers ::connection
+   * Returns a JSON response.
    */
-  public function testConnectionCreatesClient(): void {
-    $client = $this->createMock(Client::class);
-    $factory = $this->createMock(MeilisearchClientFactoryInterface::class);
-    $factory->expects($this->once())
-      ->method('getInstance')
-      ->with('http://localhost:7700', 'key')
-      ->willReturn($client);
+  protected function json(array $body, int $status = 200): Response {
+    return new Response($status, ['Content-Type' => 'application/json'], json_encode($body));
+  }
 
-    $service = new MeilisearchApiService($factory);
-    $service->setUrl('http://localhost:7700');
-    $service->setApiKey('key');
+  /**
+   * @covers ::waitForTask
+   */
+  public function testFailedTaskThrowsWithMeilisearchError(): void {
+    $api = $this->api([
+      $this->json(['uid' => 7, 'status' => 'failed', 'error' => ['message' => 'Document has invalid _geo', 'code' => 'invalid_document_geo_field']]),
+    ]);
+    try {
+      $api->waitForTask(7);
+      $this->fail('A failed task must throw.');
+    }
+    catch (MeilisearchApiException $e) {
+      $this->assertStringContainsString('Document has invalid _geo', $e->getMessage());
+      $this->assertSame('invalid_document_geo_field', $e->getErrorCode());
+    }
+  }
 
-    $this->assertSame($client, $service->connection());
-    // Second call should reuse cached client.
-    $this->assertSame($client, $service->connection());
+  /**
+   * @covers ::waitForTask
+   */
+  public function testSucceededTaskIsReturned(): void {
+    $api = $this->api([$this->json(['uid' => 7, 'status' => 'succeeded'])]);
+    $this->assertSame('succeeded', $api->waitForTask(7)['status']);
+  }
+
+  /**
+   * @covers ::waitForTask
+   */
+  public function testTaskTimeoutThrows(): void {
+    $api = $this->api(array_fill(0, 20, $this->json(['uid' => 7, 'status' => 'processing'])));
+    $this->expectException(MeilisearchApiException::class);
+    $this->expectExceptionMessageMatches('/task 7/i');
+    $api->waitForTask(7, 1);
+  }
+
+  /**
+   * @covers ::search
+   */
+  public function testNetworkErrorThrows(): void {
+    $api = $this->api([new ConnectException('Connection refused', new Request('POST', '/'))]);
+    $this->expectException(MeilisearchApiException::class);
+    $api->search('idx', 'foo', []);
+  }
+
+  /**
+   * @covers ::search
+   */
+  public function testApiErrorKeepsErrorCode(): void {
+    $api = $this->api([
+      $this->json(['message' => 'Attribute `x` is not filterable.', 'code' => 'invalid_search_filter', 'type' => 'invalid_request', 'link' => ''], 400),
+    ]);
+    try {
+      $api->search('idx', 'foo', ['filter' => 'x = 1']);
+      $this->fail('An API error must throw.');
+    }
+    catch (MeilisearchApiException $e) {
+      $this->assertSame('invalid_search_filter', $e->getErrorCode());
+    }
+  }
+
+  /**
+   * @covers ::search
+   */
+  public function testSearchReturnsRawResponse(): void {
+    $api = $this->api([$this->json(['hits' => [], 'metadata' => ['queryUid' => 'abc']])]);
+    $this->assertSame('abc', $api->search('idx', '', [])['metadata']['queryUid']);
+  }
+
+  /**
+   * @covers \Drupal\meilisearch\Api\MeilisearchApiFactory::create
+   */
+  public function testExtraHeadersAndUserAgentAreSent(): void {
+    $api = $this->api([$this->json(['hits' => []])], ['Meili-Include-Metadata' => 'true']);
+    $api->search('idx', '', []);
+    $request = $this->history[0]['request'];
+    $this->assertSame('true', $request->getHeaderLine('Meili-Include-Metadata'));
+    $this->assertSame('Bearer secret', $request->getHeaderLine('Authorization'));
+    $this->assertStringContainsString('Meilisearch Drupal', $request->getHeaderLine('User-Agent'));
+  }
+
+  /**
+   * @covers ::multiSearch
+   */
+  public function testMultiSearchPostsQueriesAndReturnsResults(): void {
+    $api = $this->api([$this->json(['results' => [['hits' => [], 'indexUid' => 'idx']]])]);
+    $results = $api->multiSearch([['indexUid' => 'idx', 'q' => 'foo', 'limit' => 0]]);
+    $this->assertSame('idx', $results[0]['indexUid']);
+    $request = $this->history[0]['request'];
+    $this->assertSame('http://meili.test:7700/multi-search', (string) $request->getUri());
+    $this->assertSame(['queries' => [['indexUid' => 'idx', 'q' => 'foo', 'limit' => 0]]], json_decode((string) $request->getBody(), TRUE));
+  }
+
+  /**
+   * @covers ::sendEvent
+   */
+  public function testSendEventPostsToEventsRoute(): void {
+    $api = $this->api([new Response(201)]);
+    $api->sendEvent(['eventType' => 'click']);
+    $this->assertSame('http://meili.test:7700/events', (string) $this->history[0]['request']->getUri());
+  }
+
+  /**
+   * @covers ::isCloud
+   */
+  public function testIsCloudDetectsMeilisearchDomain(): void {
+    $this->assertTrue($this->api([], [], 'https://ms-abc123.fra.meilisearch.io')->isCloud());
+    $this->assertTrue($this->api([], [], 'https://meilisearch.io')->isCloud());
+    $this->assertFalse($this->api([], [], 'http://127.0.0.1:7700')->isCloud());
+    $this->assertFalse($this->api([], [], 'https://evilmeilisearch.io')->isCloud(), 'Confusable hostname must not be treated as cloud.');
   }
 
 }

@@ -7,6 +7,7 @@ namespace Drupal\meilisearch\Plugin\search_api\backend;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Plugin\PluginFormInterface;
 use Drupal\meilisearch\Api\MeilisearchApiException;
+use Drupal\meilisearch\Api\MeilisearchApiFactory;
 use Drupal\meilisearch\Api\MeilisearchApiServiceInterface;
 use Drupal\meilisearch\Converter\DocumentConverterInterface;
 use Drupal\meilisearch\Filter\FilterBuilderInterface;
@@ -32,7 +33,8 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
 
   use PluginFormTrait;
 
-  protected MeilisearchApiServiceInterface $api;
+  protected MeilisearchApiFactory $apiFactory;
+  protected ?MeilisearchApiServiceInterface $api = NULL;
   protected DocumentConverterInterface $documentConverter;
   protected FilterBuilderInterface $filterBuilder;
 
@@ -40,17 +42,16 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
     array $configuration,
     $plugin_id,
     $plugin_definition,
-    MeilisearchApiServiceInterface $api,
+    MeilisearchApiFactory $apiFactory,
     DocumentConverterInterface $documentConverter,
     FilterBuilderInterface $filterBuilder,
     LoggerInterface $logger,
   ) {
     parent::__construct($configuration, $plugin_id, $plugin_definition);
-    $this->api = $api;
+    $this->apiFactory = $apiFactory;
     $this->documentConverter = $documentConverter;
     $this->filterBuilder = $filterBuilder;
     $this->logger = $logger;
-    $this->configureApi();
   }
 
   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition): self {
@@ -58,7 +59,7 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
       $configuration,
       $plugin_id,
       $plugin_definition,
-      $container->get('meilisearch.api'),
+      $container->get('meilisearch.api_factory'),
       $container->get('meilisearch.document_converter'),
       $container->get('meilisearch.filter_builder'),
       $container->get('logger.channel.meilisearch'),
@@ -82,16 +83,16 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
   }
 
   /**
-   * Configures the API service using the current configuration.
+   * Returns the API service for this server, creating it on first use.
    */
-  protected function configureApi(): void {
-    if ($this->configuration['connection_mode'] === 'cloud') {
-      $this->api->setUrl($this->configuration['host']);
+  public function getApi(): MeilisearchApiServiceInterface {
+    if ($this->api === NULL) {
+      $url = $this->configuration['connection_mode'] === 'cloud'
+        ? $this->configuration['host']
+        : rtrim($this->configuration['host'], '/') . ':' . $this->configuration['port'];
+      $this->api = $this->apiFactory->create($url, (string) $this->configuration['api_key']);
     }
-    else {
-      $this->api->setUrl(rtrim($this->configuration['host'], '/') . ':' . $this->configuration['port']);
-    }
-    $this->api->setApiKey($this->configuration['api_key']);
+    return $this->api;
   }
 
   /**
@@ -99,7 +100,7 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
    */
   public function setConfiguration(array $configuration): void {
     parent::setConfiguration($configuration);
-    $this->configureApi();
+    $this->api = NULL;
   }
 
   /**
@@ -227,14 +228,14 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
   public function viewSettings(): array {
     $info = [];
     try {
-      $version = $this->api->version();
+      $version = $this->getApi()->version();
       $info[] = [
         'label' => $this->t('Meilisearch version'),
         'info' => $version['pkgVersion'] ?? 'unknown',
       ];
       $info[] = [
         'label' => $this->t('Cloud'),
-        'info' => $this->api->isCloud() ? $this->t('Yes') : $this->t('No'),
+        'info' => $this->getApi()->isCloud() ? $this->t('Yes') : $this->t('No'),
       ];
     }
     catch (MeilisearchApiException $e) {
@@ -247,7 +248,7 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
    * {@inheritdoc}
    */
   public function isAvailable(): bool {
-    return $this->api->ping();
+    return $this->getApi()->ping();
   }
 
   /**
@@ -255,8 +256,8 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
    */
   public function addIndex(IndexInterface $index): void {
     try {
-      $task = $this->api->createIndex($index->id());
-      $this->api->waitForTask((int) $task['taskUid']);
+      $task = $this->getApi()->createIndex($index->id(), 'id');
+      $this->getApi()->waitForTask((int) $task['taskUid']);
       $this->updateIndex($index);
     }
     catch (MeilisearchApiException $e) {
@@ -273,8 +274,8 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
   public function updateIndex(IndexInterface $index): void {
     try {
       $settings = $this->buildIndexSettings($index);
-      $task = $this->api->updateSettings($index->id(), $settings);
-      $this->api->waitForTask((int) $task['taskUid']);
+      $task = $this->getApi()->updateSettings($index->id(), $settings);
+      $this->getApi()->waitForTask((int) $task['taskUid']);
     }
     catch (MeilisearchApiException $e) {
       $this->logger->error('Failed to update index @id: @msg', [
@@ -293,8 +294,8 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
     }
     $id = is_object($index) ? $index->id() : (string) $index;
     try {
-      $task = $this->api->deleteIndex($id);
-      $this->api->waitForTask((int) $task['taskUid']);
+      $task = $this->getApi()->deleteIndex($id);
+      $this->getApi()->waitForTask((int) $task['taskUid']);
     }
     catch (MeilisearchApiException $e) {
       $this->logger->error('Failed to remove index @id: @msg', ['@id' => $id, '@msg' => $e->getMessage()]);
@@ -348,8 +349,8 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
   public function indexItems(IndexInterface $index, array $items): array {
     $documents = $this->documentConverter->convertToDocuments($items);
     try {
-      $task = $this->api->addDocuments($index->id(), $documents);
-      $this->api->waitForTask((int) $task['taskUid']);
+      $task = $this->getApi()->addDocuments($index->id(), $documents, 'id');
+      $this->getApi()->waitForTask((int) $task['taskUid']);
     }
     catch (MeilisearchApiException $e) {
       $this->logger->error('Index items failed: @msg', ['@msg' => $e->getMessage()]);
@@ -364,8 +365,8 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
   public function deleteItems(IndexInterface $index, array $item_ids): void {
     $ids = array_map(fn($id) => MeilisearchUtils::formatAsDocumentId($id), $item_ids);
     try {
-      $task = $this->api->deleteDocuments($index->id(), $ids);
-      $this->api->waitForTask((int) $task['taskUid']);
+      $task = $this->getApi()->deleteDocuments($index->id(), $ids);
+      $this->getApi()->waitForTask((int) $task['taskUid']);
     }
     catch (MeilisearchApiException $e) {
       $this->logger->error('Delete items failed: @msg', ['@msg' => $e->getMessage()]);
@@ -377,8 +378,8 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
    */
   public function deleteAllIndexItems(IndexInterface $index, $datasource_id = NULL): void {
     try {
-      $task = $this->api->deleteAllDocuments($index->id());
-      $this->api->waitForTask((int) $task['taskUid']);
+      $task = $this->getApi()->deleteAllDocuments($index->id());
+      $this->getApi()->waitForTask((int) $task['taskUid']);
     }
     catch (MeilisearchApiException $e) {
       $this->logger->error('Delete all items failed: @msg', ['@msg' => $e->getMessage()]);
@@ -433,15 +434,15 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
     $this->alterSearchOptions($options, $query);
 
     try {
-      $data = $this->api->search($index->id(), $keys, $options);
+      $data = $this->getApi()->search($index->id(), $keys, $options);
     }
     catch (MeilisearchApiException $e) {
       $this->logger->error('Search failed: @msg', ['@msg' => $e->getMessage()]);
       throw new SearchApiException($e->getMessage(), $e->getCode(), $e);
     }
 
-    $results->setResultCount($data->getEstimatedTotalHits());
-    foreach ($data->getHits() as $hit) {
+    $results->setResultCount((int) ($data['estimatedTotalHits'] ?? 0));
+    foreach ($data['hits'] ?? [] as $hit) {
       if (!isset($hit['search_api_id'])) {
         continue;
       }
@@ -453,7 +454,7 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
     }
 
     // Store raw Meilisearch response for subscribers (facets, analytics).
-    $results->setExtraData('meilisearch_response', $data->toArray());
+    $results->setExtraData('meilisearch_response', $data);
   }
 
   /**
@@ -492,7 +493,7 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
 
   public function __sleep(): array {
     $properties = array_flip(parent::__sleep());
-    unset($properties['api'], $properties['documentConverter'], $properties['filterBuilder'], $properties['logger']);
+    unset($properties['api'], $properties['apiFactory'], $properties['documentConverter'], $properties['filterBuilder'], $properties['logger']);
     return array_keys($properties);
   }
 
@@ -501,11 +502,10 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
       parent::__wakeup();
     }
     $container = \Drupal::getContainer();
-    $this->api = $container->get('meilisearch.api');
+    $this->apiFactory = $container->get('meilisearch.api_factory');
     $this->documentConverter = $container->get('meilisearch.document_converter');
     $this->filterBuilder = $container->get('meilisearch.filter_builder');
     $this->logger = $container->get('logger.channel.meilisearch');
-    $this->configureApi();
   }
 
 }
