@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\meilisearch\Kernel;
 
 use Meilisearch\Client;
+use Meilisearch\Contracts\IndexesQuery;
 
 /**
  * Connects kernel tests to the Meilisearch instance given by the environment.
@@ -58,7 +59,7 @@ trait MeilisearchTestTrait {
    */
   protected function testIndexUids(): array {
     $uids = [];
-    foreach ($this->meilisearchClient()->getIndexes(['limit' => 1000])->getResults() as $index) {
+    foreach ($this->meilisearchClient()->getIndexes((new IndexesQuery())->setLimit(1000))->getResults() as $index) {
       if (str_starts_with($index->getUid(), $this->meilisearchPrefix)) {
         $uids[] = $index->getUid();
       }

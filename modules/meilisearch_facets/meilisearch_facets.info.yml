@@ -1,8 +1,0 @@
-name: 'Meilisearch Facets'
-type: module
-description: 'Enables Facets module integration with Meilisearch.'
-core_version_requirement: ^9.3 || ^10 || ^11
-package: 'Search'
-dependencies:
-  - meilisearch:meilisearch
-  - facets:facets
