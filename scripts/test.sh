@@ -10,4 +10,4 @@ for a in "$@"; do
 done
 docker compose build -q tests
 docker compose up -d --wait meilisearch
-docker compose run --rm tests web/modules/custom/meilisearch/scripts/phpunit "${args[@]}"
+docker compose run --rm tests web/modules/custom/meilisearch/scripts/phpunit ${args[@]+"${args[@]}"}
