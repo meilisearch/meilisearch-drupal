@@ -10,17 +10,11 @@
     "source": "https://git.drupalcode.org/project/meilisearch"
   },
   "require": {
-    "php": "^8.1",
-    "drupal/search_api": "^1.30",
+    "php": ">=8.1",
+    "drupal/search_api": "^1.39",
     "meilisearch/meilisearch-php": "^1.16"
   },
-  "require-dev": {
-    "drupal/facets": "^2.0 || ^3.0",
-    "phpunit/phpunit": "^9.6 || ^10.5"
-  },
-  "autoload": {
-    "psr-4": {
-      "Drupal\\meilisearch\\": "src/"
-    }
+  "suggest": {
+    "drupal/facets": "Faceted search on Meilisearch indexes."
   }
 }

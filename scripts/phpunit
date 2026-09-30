@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Runs PHPUnit inside the tests container. Defaults to the whole module suite.
+set -euo pipefail
+cd /drupal
+if [ $# -eq 0 ]; then set -- web/modules/custom/meilisearch; fi
+exec vendor/bin/phpunit -c web/core/phpunit.xml.dist "$@"

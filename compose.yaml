@@ -1,0 +1,51 @@
+# Local test environment.
+#   docker compose watch                          # keep the module synced
+#   docker compose exec tests scripts/phpunit     # run the whole suite
+# or one-shot: scripts/test.sh [phpunit args]
+services:
+  meilisearch:
+    image: getmeili/meilisearch:${MEILISEARCH_VERSION:-v1.54}
+    environment:
+      MEILI_MASTER_KEY: testMasterKey123
+      MEILI_NO_ANALYTICS: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      MEILISEARCH_TEST_URL: http://meilisearch:7700
+      MEILISEARCH_TEST_KEY: testMasterKey123
+    depends_on:
+      meilisearch:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: sync
+          path: ./src
+          target: /drupal/web/modules/custom/meilisearch/src
+        - action: sync
+          path: ./tests
+          target: /drupal/web/modules/custom/meilisearch/tests
+        - action: sync
+          path: ./config
+          target: /drupal/web/modules/custom/meilisearch/config
+        - action: sync
+          path: ./modules
+          target: /drupal/web/modules/custom/meilisearch/modules
+        - action: sync
+          path: ./meilisearch.module
+          target: /drupal/web/modules/custom/meilisearch/meilisearch.module
+        - action: sync
+          path: ./meilisearch.services.yml
+          target: /drupal/web/modules/custom/meilisearch/meilisearch.services.yml
+        - action: sync
+          path: ./meilisearch.info.yml
+          target: /drupal/web/modules/custom/meilisearch/meilisearch.info.yml
+        - action: rebuild
+          path: ./composer.json

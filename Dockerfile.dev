@@ -1,0 +1,26 @@
+# Test/dev image: a Drupal codebase with this module under
+# web/modules/custom/meilisearch. Used by compose.yaml.
+FROM php:8.3-cli
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git unzip libsqlite3-dev libzip-dev libpng-dev sqlite3 \
+ && docker-php-ext-install pdo_sqlite zip gd \
+ && rm -rf /var/lib/apt/lists/* \
+ && echo "memory_limit=-1" > /usr/local/etc/php/conf.d/memory.ini
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+ARG DRUPAL_CORE=^11
+ENV COMPOSER_ALLOW_SUPERUSER=1
+WORKDIR /drupal
+RUN composer create-project "drupal/recommended-project:${DRUPAL_CORE}" . --no-interaction --no-install \
+ && composer config allow-plugins.php-http/discovery true \
+ && composer config allow-plugins.tbachert/spi true \
+ && composer require --no-update drupal/search_api:^1.39 drupal/facets:^3 meilisearch/meilisearch-php:^1.16 \
+ && composer require --dev --no-update "drupal/core-dev:${DRUPAL_CORE}" \
+ && composer update --no-interaction --no-progress -W
+
+COPY . /drupal/web/modules/custom/meilisearch
+
+ENV SIMPLETEST_DB=sqlite://localhost//tmp/test.sqlite \
+    SIMPLETEST_BASE_URL=http://localhost
+CMD ["sleep", "infinity"]

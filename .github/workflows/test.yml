@@ -6,39 +6,21 @@ on:
   pull_request:
 
 jobs:
-  unit:
+  phpunit:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        php: ['8.1', '8.2', '8.3']
+        include:
+          - drupal: '^11'
+            meilisearch: 'v1.54'
+          - drupal: '^10.3'
+            meilisearch: 'v1.54'
+    env:
+      MEILISEARCH_VERSION: ${{ matrix.meilisearch }}
     steps:
       - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          coverage: none
-      - run: composer install --no-interaction --prefer-dist
-      - run: vendor/bin/phpunit --testsuite=unit
-
-  functional:
-    runs-on: ubuntu-latest
-    services:
-      meilisearch:
-        image: getmeili/meilisearch:latest
-        ports: ['7700:7700']
-        env:
-          MEILI_MASTER_KEY: testKey
-          MEILI_NO_ANALYTICS: 'true'
-        options: >-
-          --health-cmd "curl -f http://localhost:7700/health"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.3'
-      - run: composer install --no-interaction
-      - name: Verify Meilisearch reachable
-        run: curl -f http://localhost:7700/health
+      - name: Build test image
+        run: docker compose build --build-arg DRUPAL_CORE='${{ matrix.drupal }}' tests
+      - name: Run PHPUnit
+        run: scripts/test.sh
