@@ -24,8 +24,7 @@ class BooleanValueParser implements ConditionParserInterface {
    */
   public function parse(ConditionInterface $condition, IndexInterface $index): string {
     $operator = $condition->getOperator() === '<>' ? '!=' : $condition->getOperator();
-    $value = $condition->getValue() ? 'true' : 'false';
-    return sprintf('%s %s %s', $condition->getField(), $operator, $value);
+    return sprintf('%s %s %s', $condition->getField(), $operator, FilterValue::format($condition->getValue(), 'boolean'));
   }
 
 }

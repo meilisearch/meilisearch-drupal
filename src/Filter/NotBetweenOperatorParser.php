@@ -24,8 +24,9 @@ class NotBetweenOperatorParser implements ConditionParserInterface {
    * {@inheritdoc}
    */
   public function parse(ConditionInterface $condition, IndexInterface $index): string {
+    $type = FilterValue::fieldType($index, $condition->getField());
     [$min, $max] = array_values($condition->getValue());
-    return sprintf('NOT %s %s TO %s', $condition->getField(), $min, $max);
+    return sprintf('NOT %s %s TO %s', $condition->getField(), FilterValue::format($min, $type), FilterValue::format($max, $type));
   }
 
 }

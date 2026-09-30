@@ -4,75 +4,210 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\meilisearch\Unit\Filter;
 
+use Drupal\meilisearch\Filter\BetweenOperatorParser;
 use Drupal\meilisearch\Filter\BooleanValueParser;
 use Drupal\meilisearch\Filter\FilterBuilder;
+use Drupal\meilisearch\Filter\InOperatorParser;
+use Drupal\meilisearch\Filter\MeilisearchFilterException;
+use Drupal\meilisearch\Filter\NotBetweenOperatorParser;
+use Drupal\meilisearch\Filter\NotInOperatorParser;
 use Drupal\meilisearch\Filter\NullValueParser;
 use Drupal\meilisearch\Filter\ScalarValueParser;
 use Drupal\search_api\IndexInterface;
+use Drupal\search_api\Item\FieldInterface;
 use Drupal\search_api\Query\ConditionGroup;
 use PHPUnit\Framework\TestCase;
 
+/**
+ * @coversDefaultClass \Drupal\meilisearch\Filter\FilterBuilder
+ */
 class FilterBuilderTest extends TestCase {
 
+  /**
+   * Field types of the mocked index.
+   */
+  protected const FIELDS = [
+    'title' => 'text',
+    'count' => 'integer',
+    'genre' => 'string',
+    'rating' => 'decimal',
+    'published' => 'boolean',
+    'category' => 'string',
+    'created' => 'date',
+  ];
+
   public function testSingleCondition(): void {
-    $builder = $this->buildBuilder();
     $group = new ConditionGroup('AND');
     $group->addCondition('title', 'Hello', '=');
 
-    $this->assertSame('title = "Hello"', $builder->build($group, $this->createIndex()));
+    $this->assertSame('title = "Hello"', $this->build($group));
   }
 
   public function testAndGroup(): void {
-    $builder = $this->buildBuilder();
     $group = new ConditionGroup('AND');
     $group->addCondition('title', 'Hello', '=');
     $group->addCondition('count', 5, '>');
 
-    $this->assertSame('(title = "Hello" AND count > 5)', $builder->build($group, $this->createIndex()));
+    $this->assertSame('(title = "Hello" AND count > 5)', $this->build($group));
   }
 
   public function testOrGroup(): void {
-    $builder = $this->buildBuilder();
     $group = new ConditionGroup('OR');
     $group->addCondition('genre', 'action', '=');
     $group->addCondition('genre', 'comedy', '=');
 
-    $this->assertSame('(genre = "action" OR genre = "comedy")', $builder->build($group, $this->createIndex()));
+    $this->assertSame('(genre = "action" OR genre = "comedy")', $this->build($group));
   }
 
   public function testNestedGroups(): void {
-    $builder = $this->buildBuilder();
     $inner = new ConditionGroup('OR');
     $inner->addCondition('genre', 'action', '=');
     $inner->addCondition('genre', 'comedy', '=');
-
     $outer = new ConditionGroup('AND');
     $outer->addConditionGroup($inner);
     $outer->addCondition('rating', 4, '>=');
 
-    $this->assertSame(
-      '((genre = "action" OR genre = "comedy") AND rating >= 4)',
-      $builder->build($outer, $this->createIndex())
-    );
+    $this->assertSame('((genre = "action" OR genre = "comedy") AND rating >= 4)', $this->build($outer));
   }
 
   public function testEmptyGroupReturnsNull(): void {
-    $builder = $this->buildBuilder();
+    $this->assertNull($this->build(new ConditionGroup('AND')));
+  }
+
+  /**
+   * Groups tagged for an OR facet are left out when that tag is excluded.
+   *
+   * @covers ::build
+   */
+  public function testExcludedTagsAreSkipped(): void {
+    $facet = new ConditionGroup('OR', ['facet:genre']);
+    $facet->addCondition('genre', 'action');
+    $outer = new ConditionGroup('AND');
+    $outer->addConditionGroup($facet);
+    $outer->addCondition('count', 1);
+
+    $this->assertSame('count = 1', $this->build($outer, ['facet:genre']));
+    $this->assertSame('(genre = "action" AND count = 1)', $this->build($outer));
+  }
+
+  /**
+   * An unknown field must fail loudly instead of widening the results.
+   *
+   * @covers ::build
+   */
+  public function testUnknownFieldThrows(): void {
     $group = new ConditionGroup('AND');
+    $group->addCondition('not_indexed', 'x');
 
-    $this->assertNull($builder->build($group, $this->createIndex()));
+    $this->expectException(MeilisearchFilterException::class);
+    $this->expectExceptionMessageMatches('/not_indexed/');
+    $this->build($group);
   }
 
-  private function buildBuilder(): FilterBuilder {
+  /**
+   * A condition no parser supports must fail loudly.
+   *
+   * @covers ::build
+   */
+  public function testUnsupportedConditionThrows(): void {
+    $group = new ConditionGroup('AND');
+    $group->addCondition('genre', ['a', 'b'], '=');
+
+    $this->expectException(MeilisearchFilterException::class);
+    $this->build($group);
+  }
+
+  /**
+   * @covers ::build
+   */
+  public function testSpecialFieldsAreFilterable(): void {
+    $group = new ConditionGroup('AND');
+    $group->addCondition('search_api_language', ['en', 'und'], 'IN');
+    $group->addCondition('search_api_datasource', 'entity:node');
+    $group->addCondition('search_api_id', 'entity:node/3:en', '>');
+
+    $this->assertSame(
+      '(search_api_language IN ["en", "und"] AND search_api_datasource = "entity:node" AND search_api_id > "entity:node/3:en")',
+      $this->build($group),
+    );
+  }
+
+  /**
+   * Documents never store NULL: missing values are missing attributes.
+   *
+   * @covers ::build
+   */
+  public function testNullConditionsUseExistence(): void {
+    $group = new ConditionGroup('AND');
+    $group->addCondition('category', NULL);
+    $this->assertSame('(category NOT EXISTS OR category IS NULL)', $this->build($group));
+
+    $group = new ConditionGroup('AND');
+    $group->addCondition('category', NULL, '<>');
+    $this->assertSame('(category EXISTS AND NOT category IS NULL)', $this->build($group));
+  }
+
+  /**
+   * Values are formatted according to the field type.
+   *
+   * @covers ::build
+   */
+  public function testValuesFollowFieldTypes(): void {
+    $group = new ConditionGroup('AND');
+    $group->addCondition('genre', '123');
+    $group->addCondition('count', '7');
+    $group->addCondition('published', '0');
+    $group->addCondition('created', '2026-01-01', '>=');
+    $this->assertSame(
+      sprintf('(genre = "123" AND count = 7 AND published = false AND created >= %d)', strtotime('2026-01-01')),
+      $this->build($group),
+    );
+  }
+
+  /**
+   * @covers ::build
+   */
+  public function testBetweenQuotesStrings(): void {
+    $group = new ConditionGroup('AND');
+    $group->addCondition('category', ['', 'foo'], 'BETWEEN');
+    $group->addCondition('rating', ['0.9', '1.5'], 'NOT BETWEEN');
+
+    $this->assertSame('(category "" TO "foo" AND NOT rating 0.9 TO 1.5)', $this->build($group));
+  }
+
+  /**
+   * Builds a filter with every parser registered, like the container does.
+   */
+  private function build(ConditionGroup $group, array $excludeTags = []): ?string {
     $builder = new FilterBuilder();
-    $builder->addConditionParser(new BooleanValueParser());
-    $builder->addConditionParser(new NullValueParser());
-    $builder->addConditionParser(new ScalarValueParser());
-    return $builder;
+    foreach ([
+      new BooleanValueParser(),
+      new NullValueParser(),
+      new BetweenOperatorParser(),
+      new NotBetweenOperatorParser(),
+      new InOperatorParser(),
+      new NotInOperatorParser(),
+      new ScalarValueParser(),
+    ] as $parser) {
+      $builder->addConditionParser($parser);
+    }
+    return $builder->build($group, $this->createIndex(), $excludeTags);
   }
 
+  /**
+   * Returns an index mock with the fields of self::FIELDS.
+   */
   private function createIndex(): IndexInterface {
-    return $this->createMock(IndexInterface::class);
+    $index = $this->createMock(IndexInterface::class);
+    $index->method('getField')->willReturnCallback(function (string $id) {
+      if (!isset(self::FIELDS[$id])) {
+        return NULL;
+      }
+      $field = $this->createMock(FieldInterface::class);
+      $field->method('getType')->willReturn(self::FIELDS[$id]);
+      return $field;
+    });
+    return $index;
   }
 
 }

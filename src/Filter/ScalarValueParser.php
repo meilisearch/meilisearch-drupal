@@ -34,9 +34,7 @@ class ScalarValueParser implements ConditionParserInterface {
     $value = $condition->getValue();
     $operator = $condition->getOperator() === '<>' ? '!=' : $condition->getOperator();
 
-    $formatted = is_numeric($value)
-      ? (string) $value
-      : '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], (string) $value) . '"';
+    $formatted = FilterValue::format($value, FilterValue::fieldType($index, $field));
 
     return sprintf('%s %s %s', $field, $operator, $formatted);
   }

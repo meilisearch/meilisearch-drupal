@@ -23,10 +23,8 @@ class NotInOperatorParser implements ConditionParserInterface {
    * {@inheritdoc}
    */
   public function parse(ConditionInterface $condition, IndexInterface $index): string {
-    $values = array_map(
-      fn($v) => is_numeric($v) ? (string) $v : '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], (string) $v) . '"',
-      $condition->getValue()
-    );
+    $type = FilterValue::fieldType($index, $condition->getField());
+    $values = array_map(fn($v) => FilterValue::format($v, $type), $condition->getValue());
     return sprintf('%s NOT IN [%s]', $condition->getField(), implode(', ', $values));
   }
 

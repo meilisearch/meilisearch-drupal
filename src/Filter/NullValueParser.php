@@ -23,9 +23,12 @@ class NullValueParser implements ConditionParserInterface {
    * {@inheritdoc}
    */
   public function parse(ConditionInterface $condition, IndexInterface $index): string {
-    $operator = $condition->getOperator();
-    $suffix = in_array($operator, ['!=', '<>'], TRUE) ? 'IS NOT NULL' : 'IS NULL';
-    return sprintf('%s %s', $condition->getField(), $suffix);
+    // Documents leave out fields without values, and never store NULL.
+    $field = $condition->getField();
+    if (in_array($condition->getOperator(), ['!=', '<>'], TRUE)) {
+      return sprintf('(%1$s EXISTS AND NOT %1$s IS NULL)', $field);
+    }
+    return sprintf('(%1$s NOT EXISTS OR %1$s IS NULL)', $field);
   }
 
 }

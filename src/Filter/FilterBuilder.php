@@ -9,11 +9,16 @@ use Drupal\search_api\Query\ConditionGroupInterface;
 use Drupal\search_api\Query\ConditionInterface;
 
 /**
- * Default implementation of FilterBuilder.
+ * Default implementation of the filter builder.
+ *
+ * Each condition is handed to the first condition parser (services tagged
+ * "meilisearch.condition_parser", by priority) that supports it.
  */
 class FilterBuilder implements FilterBuilderInterface {
 
   /**
+   * The condition parsers, in priority order.
+   *
    * @var \Drupal\meilisearch\Filter\ConditionParserInterface[]
    */
   protected array $parsers = [];
@@ -28,44 +33,53 @@ class FilterBuilder implements FilterBuilderInterface {
   /**
    * {@inheritdoc}
    */
-  public function build(ConditionGroupInterface $group, IndexInterface $index): ?string {
+  public function build(ConditionGroupInterface $group, IndexInterface $index, array $excludeTags = []): ?string {
     $parts = [];
     foreach ($group->getConditions() as $item) {
       if ($item instanceof ConditionGroupInterface) {
-        $nested = $this->build($item, $index);
+        if ($excludeTags && array_intersect($excludeTags, $item->getTags())) {
+          continue;
+        }
+        $nested = $this->build($item, $index, $excludeTags);
         if ($nested !== NULL) {
           $parts[] = $nested;
         }
       }
       elseif ($item instanceof ConditionInterface) {
-        $parsed = $this->parseCondition($item, $index);
-        if ($parsed !== NULL) {
-          $parts[] = $parsed;
-        }
+        $parts[] = $this->parseCondition($item, $index);
       }
     }
 
-    if (empty($parts)) {
+    if (!$parts) {
       return NULL;
     }
-
     if (count($parts) === 1) {
       return $parts[0];
     }
-
     return '(' . implode(' ' . $group->getConjunction() . ' ', $parts) . ')';
   }
 
   /**
-   * Finds the first supporting parser and returns its output.
+   * Returns the filter expression of the first parser supporting a condition.
+   *
+   * @throws \Drupal\meilisearch\Filter\MeilisearchFilterException
    */
-  protected function parseCondition(ConditionInterface $condition, IndexInterface $index): ?string {
+  protected function parseCondition(ConditionInterface $condition, IndexInterface $index): string {
+    $field = $condition->getField();
+    if (FilterValue::fieldType($index, $field) === NULL) {
+      throw new MeilisearchFilterException(sprintf('Cannot filter on "%s": the field is not indexed on index "%s".', $field, $index->id()));
+    }
     foreach ($this->parsers as $parser) {
       if ($parser->supports($condition, $index)) {
         return $parser->parse($condition, $index);
       }
     }
-    return NULL;
+    throw new MeilisearchFilterException(sprintf(
+      'Meilisearch cannot express the condition on "%s" with operator "%s" and a value of type %s.',
+      $field,
+      $condition->getOperator(),
+      get_debug_type($condition->getValue()),
+    ));
   }
 
 }

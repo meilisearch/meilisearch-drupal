@@ -49,8 +49,3 @@ services:
     class: Drupal\meilisearch\Filter\NotInOperatorParser
     tags:
       - { name: meilisearch.condition_parser, priority: 15 }
-
-  meilisearch.condition_parser.geo:
-    class: Drupal\meilisearch\Filter\GeoFilterParser
-    tags:
-      - { name: meilisearch.condition_parser, priority: 25 }

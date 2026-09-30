@@ -56,10 +56,10 @@ class ValueParsersTest extends TestCase {
     $index = $this->createMock(IndexInterface::class);
 
     $this->assertTrue($parser->supports($condition, $index));
-    $this->assertSame('field IS NULL', $parser->parse($condition, $index));
+    $this->assertSame('(field NOT EXISTS OR field IS NULL)', $parser->parse($condition, $index));
 
     $condition = new Condition('field', NULL, '<>');
-    $this->assertSame('field IS NOT NULL', $parser->parse($condition, $index));
+    $this->assertSame('(field EXISTS AND NOT field IS NULL)', $parser->parse($condition, $index));
   }
 
 }

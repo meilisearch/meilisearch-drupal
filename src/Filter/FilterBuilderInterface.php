@@ -13,11 +13,22 @@ use Drupal\search_api\Query\ConditionGroupInterface;
 interface FilterBuilderInterface {
 
   /**
-   * Parses a condition group into a Meilisearch filter string.
+   * Builds a Meilisearch filter from a condition group.
+   *
+   * @param \Drupal\search_api\Query\ConditionGroupInterface $group
+   *   The condition group.
+   * @param \Drupal\search_api\IndexInterface $index
+   *   The index being searched.
+   * @param string[] $excludeTags
+   *   Condition groups carrying any of these tags are left out. Used for
+   *   OR facets, which must ignore their own filter.
    *
    * @return string|null
-   *   The filter string, or NULL if the condition group is empty.
+   *   The filter, or NULL if there is nothing to filter on.
+   *
+   * @throws \Drupal\meilisearch\Filter\MeilisearchFilterException
+   *   When a condition uses an unknown field or cannot be expressed.
    */
-  public function build(ConditionGroupInterface $group, IndexInterface $index): ?string;
+  public function build(ConditionGroupInterface $group, IndexInterface $index, array $excludeTags = []): ?string;
 
 }
