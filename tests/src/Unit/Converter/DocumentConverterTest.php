@@ -17,14 +17,59 @@ class DocumentConverterTest extends TestCase {
   /**
    * @covers ::convertToDocuments
    */
-  public function testSanitizesDocumentId(): void {
+  public function testDocumentCarriesSearchApiSpecialFields(): void {
     $item = $this->buildItem('entity:node/123:en', []);
-    $converter = new DocumentConverter();
-    $docs = $converter->convertToDocuments([$item->getId() => $item]);
+    $docs = (new DocumentConverter())->convertToDocuments([$item->getId() => $item]);
 
     $this->assertCount(1, $docs);
-    $this->assertSame('entity-node-123-en', $docs[0]['id']);
-    $this->assertSame('entity:node/123:en', $docs[0]['search_api_id']);
+    $this->assertSame([
+      'search_api_document_id' => 'entity_3Anode_2F123_3Aen',
+      'search_api_id' => 'entity:node/123:en',
+      'search_api_datasource' => 'entity:node',
+      'search_api_language' => 'en',
+    ], $docs[0]);
+  }
+
+  /**
+   * A Drupal field called "id" must not replace the document's primary key.
+   *
+   * @covers ::convertToDocuments
+   */
+  public function testFieldNamedIdKeepsDocumentIdentity(): void {
+    $item = $this->buildItem('entity:node/1:en', [
+      'id' => ['type' => 'integer', 'values' => [1]],
+    ]);
+    $docs = (new DocumentConverter())->convertToDocuments([$item->getId() => $item]);
+
+    $this->assertSame(1, $docs[0]['id']);
+    $this->assertSame('entity_3Anode_2F1_3Aen', $docs[0]['search_api_document_id']);
+  }
+
+  /**
+   * Fields starting with "_" would collide with Meilisearch reserved fields.
+   *
+   * @covers ::convertToDocuments
+   */
+  public function testSkipsFieldsReservedByMeilisearch(): void {
+    $item = $this->buildItem('node/1', [
+      '_vectors' => ['type' => 'string', 'values' => ['x']],
+    ]);
+    $docs = (new DocumentConverter())->convertToDocuments([$item->getId() => $item]);
+
+    $this->assertArrayNotHasKey('_vectors', $docs[0]);
+  }
+
+  /**
+   * @covers ::convertToDocuments
+   */
+  public function testOnlyTheFirstLocationFieldBecomesGeo(): void {
+    $item = $this->buildItem('node/1', [
+      'home' => ['type' => 'location', 'values' => ['48.85,2.29']],
+      'work' => ['type' => 'location', 'values' => ['40.7,-74.0']],
+    ]);
+    $docs = (new DocumentConverter())->convertToDocuments([$item->getId() => $item]);
+
+    $this->assertSame(['lat' => 48.85, 'lng' => 2.29], $docs[0]['_geo']);
   }
 
   /**
@@ -87,6 +132,9 @@ class DocumentConverterTest extends TestCase {
   private function buildItem(string $itemId, array $fields): ItemInterface {
     $item = $this->createMock(ItemInterface::class);
     $item->method('getId')->willReturn($itemId);
+    [$datasource] = explode('/', $itemId, 2);
+    $item->method('getDatasourceId')->willReturn($datasource);
+    $item->method('getLanguage')->willReturn('en');
 
     $fieldObjects = [];
     foreach ($fields as $id => $spec) {

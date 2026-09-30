@@ -256,7 +256,7 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
    */
   public function addIndex(IndexInterface $index): void {
     try {
-      $task = $this->getApi()->createIndex($index->id(), 'id');
+      $task = $this->getApi()->createIndex($index->id(), DocumentConverterInterface::PRIMARY_KEY);
       $this->getApi()->waitForTask((int) $task['taskUid']);
       $this->updateIndex($index);
     }
@@ -349,7 +349,7 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
   public function indexItems(IndexInterface $index, array $items): array {
     $documents = $this->documentConverter->convertToDocuments($items);
     try {
-      $task = $this->getApi()->addDocuments($index->id(), $documents, 'id');
+      $task = $this->getApi()->addDocuments($index->id(), $documents, DocumentConverterInterface::PRIMARY_KEY);
       $this->getApi()->waitForTask((int) $task['taskUid']);
     }
     catch (MeilisearchApiException $e) {
@@ -363,7 +363,7 @@ final class MeilisearchBackend extends BackendPluginBase implements PluginFormIn
    * {@inheritdoc}
    */
   public function deleteItems(IndexInterface $index, array $item_ids): void {
-    $ids = array_map(fn($id) => MeilisearchUtils::formatAsDocumentId($id), $item_ids);
+    $ids = array_map(fn($id) => MeilisearchUtils::encodeDocumentId($id), $item_ids);
     try {
       $task = $this->getApi()->deleteDocuments($index->id(), $ids);
       $this->getApi()->waitForTask((int) $task['taskUid']);

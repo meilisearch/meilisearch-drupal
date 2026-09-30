@@ -19,11 +19,16 @@ class DocumentConverter implements DocumentConverterInterface {
     $documents = [];
     foreach ($items as $item) {
       $doc = [
-        'id' => MeilisearchUtils::formatAsDocumentId($item->getId()),
+        self::PRIMARY_KEY => MeilisearchUtils::encodeDocumentId($item->getId()),
         'search_api_id' => $item->getId(),
+        'search_api_datasource' => $item->getDatasourceId(),
+        'search_api_language' => $item->getLanguage(),
       ];
       foreach ($item->getFields() as $field) {
-        $this->applyField($doc, $field);
+        // Meilisearch reserves field names starting with "_".
+        if (!str_starts_with($field->getFieldIdentifier(), '_')) {
+          $this->applyField($doc, $field);
+        }
       }
       $documents[] = $doc;
     }
@@ -39,7 +44,11 @@ class DocumentConverter implements DocumentConverterInterface {
     $values = $field->getValues();
 
     if ($type === 'location') {
-      // Meilisearch expects _geo: {lat, lng} — take the first value.
+      // Meilisearch supports one _geo point per document: the first value of
+      // the first location field wins.
+      if (isset($doc['_geo'])) {
+        return;
+      }
       $first = reset($values);
       if (is_string($first) && str_contains($first, ',')) {
         [$lat, $lng] = array_map('trim', explode(',', $first, 2));
@@ -52,8 +61,8 @@ class DocumentConverter implements DocumentConverterInterface {
     }
 
     // Cast each value, then drop any that are NULL (e.g. unparseable dates).
-    // Empty value lists intentionally produce no field entry — Meilisearch
-    // treats absent keys as null for filtering.
+    // Fields without values are left out of the document: the filter builder
+    // matches "IS NULL" conditions with "NOT EXISTS".
     $converted = array_filter(
       array_map(fn($v) => $this->castValue($v, $type), $values),
       static fn($v) => $v !== NULL,
