@@ -1,27 +1,61 @@
-(function (Drupal) {
-  'use strict';
+/**
+ * @file
+ * Reports clicks on Meilisearch search results.
+ */
+((Drupal, once) => {
+  const COOKIE = 'meilisearch_uid';
 
-  Drupal.behaviors.meilisearchClickTracking = {
-    attach: function (context) {
-      const links = context.querySelectorAll('[data-meilisearch-result]');
-      links.forEach(function (link) {
-        if (link.dataset.meiliBound) return;
-        link.dataset.meiliBound = '1';
-        link.addEventListener('click', function () {
-          const payload = {
-            indexUid: link.dataset.meilisearchIndex,
-            queryUid: link.dataset.meilisearchQueryuid,
-            objectId: link.dataset.meilisearchResult,
-            position: parseInt(link.dataset.meilisearchPosition || '0', 10)
-          };
-          fetch('/meilisearch/events/click', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-            keepalive: true
-          });
-        });
+  /**
+   * Makes sure the anonymous visitor has a random ID cookie.
+   */
+  function ensureVisitorId() {
+    if (document.cookie.split('; ').some((c) => c.startsWith(`${COOKIE}=`))) {
+      return;
+    }
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    const id = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = `${COOKIE}=${id}; path=/; max-age=31536000; SameSite=Lax${secure}`;
+  }
+
+  /**
+   * Sends one click, surviving the navigation it triggers.
+   */
+  function send(row) {
+    const body = JSON.stringify({
+      index: row.dataset.meilisearchIndex,
+      queryUid: row.dataset.meilisearchQueryUid,
+      objectId: row.dataset.meilisearchObjectId,
+      position: parseInt(row.dataset.meilisearchPosition, 10),
+    });
+    const url = Drupal.url('meilisearch/analytics/click');
+    const blob = new Blob([body], { type: 'application/json' });
+    if (!(navigator.sendBeacon && navigator.sendBeacon(url, blob))) {
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        keepalive: true,
+        credentials: 'same-origin',
       });
     }
+  }
+
+  Drupal.behaviors.meilisearchClickTracking = {
+    attach(context) {
+      once('meilisearch-click', '[data-meilisearch-object-id]', context).forEach((row) => {
+        ensureVisitorId();
+        const onClick = (event) => {
+          // Left and middle clicks on a link inside the result.
+          if (event.button > 1 || !event.target.closest('a')) {
+            return;
+          }
+          send(row);
+        };
+        row.addEventListener('click', onClick);
+        row.addEventListener('auxclick', onClick);
+      });
+    },
   };
-})(Drupal);
+})(Drupal, once);

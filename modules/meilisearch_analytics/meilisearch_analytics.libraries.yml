@@ -3,4 +3,4 @@ click_tracking:
     js/click-tracking.js: {}
   dependencies:
     - core/drupal
-    - core/drupalSettings
+    - core/once

@@ -1,9 +1,11 @@
 meilisearch_analytics.click:
-  path: '/meilisearch/events/click'
+  path: '/meilisearch/analytics/click'
   defaults:
-    _controller: '\Drupal\meilisearch_analytics\Controller\ClickTrackingController::record'
+    _controller: '\Drupal\meilisearch_analytics\Controller\ClickController::click'
   methods: [POST]
   requirements:
+    # Anonymous visitors click results too. The controller validates the
+    # payload, refuses cross-site requests and rate-limits clients.
     _access: 'TRUE'
   options:
-    _format: 'json'
+    no_cache: TRUE

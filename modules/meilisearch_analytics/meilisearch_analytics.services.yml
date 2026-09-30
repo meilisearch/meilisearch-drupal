@@ -1,12 +1,12 @@
 services:
-  meilisearch_analytics.service:
-    class: Drupal\meilisearch_analytics\Analytics\AnalyticsService
-    arguments:
-      - '@meilisearch.api'
-      - '@current_user'
-      - '@logger.channel.meilisearch'
+  meilisearch_analytics.user_id:
+    class: Drupal\meilisearch_analytics\UserIdResolver
+    arguments: ['@current_user', '@request_stack', '@settings']
 
-  meilisearch_analytics.query_subscriber:
-    class: Drupal\meilisearch_analytics\EventSubscriber\SearchMetadataSubscriber
-    tags:
-      - { name: event_subscriber }
+  meilisearch_analytics.events:
+    class: Drupal\meilisearch_analytics\AnalyticsEvents
+    arguments: ['@meilisearch_analytics.user_id', '@logger.channel.meilisearch']
+
+  meilisearch_analytics.row_attributes:
+    class: Drupal\meilisearch_analytics\RowAttributes
+    arguments: ['@page_cache_kill_switch']
