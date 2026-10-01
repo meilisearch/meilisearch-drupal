@@ -14,7 +14,8 @@
     }
     const bytes = new Uint8Array(16);
     crypto.getRandomValues(bytes);
-    const id = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    const hex = (b) => b.toString(16).padStart(2, '0');
+    const id = Array.from(bytes, hex).join('');
     const secure = window.location.protocol === 'https:' ? '; Secure' : '';
     document.cookie = `${COOKIE}=${id}; path=/; max-age=31536000; SameSite=Lax${secure}`;
   }
@@ -44,7 +45,11 @@
 
   Drupal.behaviors.meilisearchClickTracking = {
     attach(context) {
-      once('meilisearch-click', '[data-meilisearch-object-id]', context).forEach((row) => {
+      once(
+        'meilisearch-click',
+        '[data-meilisearch-object-id]',
+        context,
+      ).forEach((row) => {
         ensureVisitorId();
         const onClick = (event) => {
           // Left and middle clicks on a link inside the result.

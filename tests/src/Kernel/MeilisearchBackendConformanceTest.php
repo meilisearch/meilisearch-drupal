@@ -304,6 +304,7 @@ class MeilisearchBackendConformanceTest extends BackendTestBase {
    * values over about 250 bytes cannot match.
    */
   protected function regressionTest2616804() {
+    // cspell:disable-next-line
     $mb_word = 'äöüßáŧæøðđŋħĸµäöüßáŧæøðđŋħĸµ';
     $this->addTestEntity(9, [
       'name' => 'Test item 9',
