@@ -158,6 +158,10 @@ class MeilisearchBackendTest extends KernelTestBase {
    * Submitting the server form with an empty key keeps the stored key.
    */
   public function testEmptyApiKeyKeepsStoredKey(): void {
+    // Let the form manage the key: drop its settings.php override.
+    unset($GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['api_key']);
+    \Drupal::configFactory()->reset();
+    \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
     $backend = $this->meilisearchBackend();
     $backend->setConfiguration(['api_key' => 'stored-secret'] + $backend->getConfiguration());
 
@@ -169,6 +173,64 @@ class MeilisearchBackendTest extends KernelTestBase {
     $form_state->setValues(['api_key' => ''] + $backend->getConfiguration());
     $backend->submitConfigurationForm($form, $form_state);
     $this->assertSame('stored-secret', $backend->getConfiguration()['api_key']);
+  }
+
+  /**
+   * Settings from settings.php are read-only in the form and never saved.
+   */
+  public function testOverriddenSettingsAreReadOnly(): void {
+    $backend = $this->meilisearchBackend();
+    $stored = \Drupal::configFactory()->getEditable('search_api.server.meilisearch_test_server')->get('backend_config');
+
+    $form_state = new FormState();
+    $form = $backend->buildConfigurationForm([], $form_state);
+    foreach (['url', 'api_key', 'index_prefix'] as $key) {
+      $this->assertTrue($form[$key]['#disabled'], "$key is read-only.");
+      $this->assertStringContainsString('settings.php', (string) $form[$key]['#description']);
+    }
+    $this->assertSame(getenv('MEILISEARCH_TEST_URL'), $form['url']['#default_value'], 'The effective URL is shown.');
+    $this->assertArrayNotHasKey('#default_value', $form['api_key'], 'The key is never sent to the browser.');
+    $this->assertArrayNotHasKey('#disabled', $form['search_mode']);
+
+    $form_state->setValues([
+      'url' => 'http://ignored.example:7700',
+      'api_key' => 'ignored-key',
+      'index_prefix' => 'ignored_',
+    ] + $backend->getConfiguration());
+    $backend->submitConfigurationForm($form, $form_state);
+    $configuration = $backend->getConfiguration();
+    foreach (['url', 'api_key', 'index_prefix'] as $key) {
+      $this->assertSame($stored[$key], $configuration[$key], "$key keeps its stored value.");
+    }
+  }
+
+  /**
+   * The server page shows the connection status and document counts.
+   */
+  public function testViewSettingsShowsStatusAndDocumentCounts(): void {
+    $info = $this->viewSettingsByLabel();
+    $this->assertSame('Connected', (string) $info['Connection']['info']);
+    $this->assertStringContainsString('0 documents', (string) $info['Index <em class="placeholder">Test index</em>']['info']);
+
+    $count = $this->indexItems($this->indexId);
+    $info = $this->viewSettingsByLabel();
+    $this->assertStringContainsString("$count documents", (string) $info['Index <em class="placeholder">Test index</em>']['info']);
+    $this->assertSame('url, api_key, index_prefix', $info['Set in settings.php']['info']);
+  }
+
+  /**
+   * Returns the server page rows keyed by label.
+   *
+   * @return array<string, array<string, mixed>>
+   *   The rows.
+   */
+  protected function viewSettingsByLabel(): array {
+    \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+    $rows = [];
+    foreach ($this->meilisearchBackend()->viewSettings() as $row) {
+      $rows[(string) $row['label']] = $row;
+    }
+    return $rows;
   }
 
   /**

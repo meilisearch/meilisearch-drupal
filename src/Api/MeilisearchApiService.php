@@ -92,6 +92,13 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
   /**
    * {@inheritdoc}
    */
+  public function indexStats(string $uid): array {
+    return $this->call(fn() => $this->client->index($uid)->stats());
+  }
+
+  /**
+   * {@inheritdoc}
+   */
   public function createIndex(string $uid, string $primaryKey): array {
     return $this->call(fn() => $this->client->createIndex($uid, ['primaryKey' => $primaryKey]));
   }

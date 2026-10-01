@@ -45,6 +45,11 @@ interface MeilisearchApiServiceInterface {
   public function indexExists(string $uid): bool;
 
   /**
+   * Returns the statistics of an index, including its number of documents.
+   */
+  public function indexStats(string $uid): array;
+
+  /**
    * Creates an index. Returns the enqueued task.
    */
   public function createIndex(string $uid, string $primaryKey): array;

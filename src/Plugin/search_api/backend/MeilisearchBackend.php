@@ -6,6 +6,7 @@ namespace Drupal\meilisearch\Plugin\search_api\backend;
 
 use Drupal\Component\Utility\UrlHelper;
 use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
+use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Plugin\PluginFormInterface;
@@ -74,6 +75,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     protected FilterBuilderInterface $filterBuilder,
     protected ModuleHandlerInterface $moduleHandler,
     LoggerInterface $logger,
+    protected ConfigFactoryInterface $configFactory,
   ) {
     parent::__construct($configuration, $plugin_id, $plugin_definition);
     $this->logger = $logger;
@@ -92,6 +94,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       $container->get('meilisearch.filter_builder'),
       $container->get('module_handler'),
       $container->get('logger.channel.meilisearch'),
+      $container->get('config.factory'),
     );
     $plugin->setFieldsHelper($container->get('search_api.fields_helper'));
     $plugin->setMessenger($container->get('messenger'));
@@ -177,6 +180,27 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   public function getIndexUid(IndexInterface|string $index): string {
     $id = $index instanceof IndexInterface ? (string) $index->id() : $index;
     return $this->configuration['index_prefix'] . $id;
+  }
+
+  /**
+   * Returns the settings of this server overridden in settings.php.
+   *
+   * @return array<string, mixed>
+   *   The effective values of the overridden settings, keyed by setting.
+   */
+  protected function getOverriddenSettings(): array {
+    $server = $this->getServer();
+    if (!$server || $server->isNew()) {
+      return [];
+    }
+    $config = $this->configFactory->get('search_api.server.' . $server->id());
+    $overridden = [];
+    foreach (array_keys($this->defaultConfiguration()) as $key) {
+      if ($config->hasOverrides('backend_config.' . $key)) {
+        $overridden[$key] = $config->get('backend_config.' . $key);
+      }
+    }
+    return $overridden;
   }
 
   /**
@@ -267,6 +291,23 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       ];
     }
 
+    // Values set in settings.php win over the form: show them read-only so
+    // edits are not silently ignored. The API key is never sent to the browser.
+    foreach ($this->getOverriddenSettings() as $key => $value) {
+      if (!isset($form[$key])) {
+        continue;
+      }
+      $form[$key]['#disabled'] = TRUE;
+      $form[$key]['#required'] = FALSE;
+      if ($key === 'api_key') {
+        $form[$key]['#description'] = $this->t('Set in settings.php, which takes precedence over this form. Change it there.');
+      }
+      else {
+        $form[$key]['#default_value'] = $value;
+        $form[$key]['#description'] = $this->t('Set in settings.php, which takes precedence over this form. Change it there.');
+      }
+    }
+
     return $form;
   }
 
@@ -274,6 +315,12 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
    * {@inheritdoc}
    */
   public function validateConfigurationForm(array &$form, FormStateInterface $form_state): void {
+    $overridden = $this->getOverriddenSettings();
+    foreach ($overridden as $key => $value) {
+      if ($key !== 'api_key') {
+        $form_state->setValue($key, $value);
+      }
+    }
     $url = rtrim(trim((string) $form_state->getValue('url')), '/');
     if (!UrlHelper::isValid($url, TRUE) || !preg_match('~^https?://~i', $url)) {
       $form_state->setErrorByName('url', $this->t('Enter a full URL starting with http:// or https://.'));
@@ -289,7 +336,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     }
 
     $key = (string) $form_state->getValue('api_key');
-    $api = $this->apiFactory->create($url, $key !== '' ? $key : (string) $this->configuration['api_key']);
+    $api = $this->apiFactory->create($url, $key !== '' ? $key : (string) ($overridden['api_key'] ?? $this->configuration['api_key']));
     try {
       $api->version();
     }
@@ -316,6 +363,18 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       'matching_strategy' => (string) $values['matching_strategy'],
       'max_total_hits' => max(1, (int) $values['max_total_hits']),
     ] + $this->configuration);
+
+    // Overridden settings keep their stored value, so settings.php values
+    // never leak into exported configuration.
+    $overridden = $this->getOverriddenSettings();
+    if ($overridden) {
+      $stored = $this->configFactory->getEditable('search_api.server.' . $this->getServer()->id())->get('backend_config') ?? [];
+      $configuration = $this->configuration;
+      foreach (array_keys($overridden) as $key) {
+        $configuration[$key] = $stored[$key] ?? $this->defaultConfiguration()[$key];
+      }
+      $this->setConfiguration($configuration);
+    }
   }
 
   /**
@@ -332,7 +391,6 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     }
     try {
       $version = $api->version();
-      $info[] = ['label' => $this->t('Meilisearch version'), 'info' => $version['pkgVersion'] ?? $this->t('Unknown')];
     }
     catch (MeilisearchApiException $e) {
       $info[] = [
@@ -340,6 +398,33 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
         'info' => $this->t('Failed: @message', ['@message' => $e->getMessage()]),
         'status' => 'error',
       ];
+      return $info;
+    }
+    $info[] = ['label' => $this->t('Connection'), 'info' => $this->t('Connected'), 'status' => 'ok'];
+    $info[] = ['label' => $this->t('Meilisearch version'), 'info' => $version['pkgVersion'] ?? $this->t('Unknown')];
+
+    foreach ($this->getServer()->getIndexes() as $index) {
+      $uid = $this->getIndexUid($index);
+      try {
+        $stats = $api->indexStats($uid);
+        $documents = $this->formatPlural((int) ($stats['numberOfDocuments'] ?? 0), '1 document', '@count documents');
+        $info[] = [
+          'label' => $this->t('Index %index', ['%index' => $index->label()]),
+          'info' => $this->t('@uid: @documents', ['@uid' => $uid, '@documents' => $documents]),
+        ];
+      }
+      catch (MeilisearchApiException $e) {
+        $info[] = [
+          'label' => $this->t('Index %index', ['%index' => $index->label()]),
+          'info' => $e->getErrorCode() === 'index_not_found'
+            ? $this->t('@uid: not created yet', ['@uid' => $uid])
+            : $this->t('@uid: @message', ['@uid' => $uid, '@message' => $e->getMessage()]),
+          'status' => 'warning',
+        ];
+      }
+    }
+    if ($overridden = array_keys($this->getOverriddenSettings())) {
+      $info[] = ['label' => $this->t('Set in settings.php'), 'info' => implode(', ', $overridden)];
     }
     return $info;
   }
