@@ -13,10 +13,9 @@ title: Installation
 
 ## Install
 
-The module is in alpha and not on drupal.org yet. Install it from GitHub by adding the repository to your site's `composer.json`, then requiring it:
+Install it from [drupal.org](https://www.drupal.org/project/meilisearch) with Composer. While the module is in alpha, the version constraint needs the `@alpha` flag:
 
 ```bash
-composer config repositories.meilisearch vcs https://github.com/meilisearch/meilisearch-drupal
 composer require 'drupal/meilisearch:^1.0@alpha'
 drush en meilisearch -y
 ```
