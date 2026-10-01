@@ -5,7 +5,8 @@ title: DDEV
 ```bash
 ddev add-on get kevinquillen/ddev-meilisearch
 ddev restart
-ddev composer require drupal/meilisearch
+ddev composer config repositories.meilisearch vcs https://github.com/meilisearch/meilisearch-drupal
+ddev composer require 'drupal/meilisearch:^1.0@alpha'
 ddev drush en meilisearch -y
 ```
 

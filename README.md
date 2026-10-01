@@ -10,10 +10,15 @@ The official [Meilisearch](https://www.meilisearch.com) backend for Drupal's [Se
 
 ## Installation
 
+The module is in alpha and not on drupal.org yet. Install it from GitHub:
+
 ```bash
-composer require drupal/meilisearch
+composer config repositories.meilisearch vcs https://github.com/meilisearch/meilisearch-drupal
+composer require 'drupal/meilisearch:^1.0@alpha'
 drush en meilisearch -y
 ```
+
+Using Meilisearch Cloud? See [`docs/guides/meilisearch-cloud.mdx`](docs/guides/meilisearch-cloud.mdx).
 
 ## Quick start
 

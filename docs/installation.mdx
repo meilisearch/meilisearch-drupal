@@ -13,10 +13,15 @@ title: Installation
 
 ## Install
 
+The module is in alpha and not on drupal.org yet. Install it from GitHub by adding the repository to your site's `composer.json`, then requiring it:
+
 ```bash
-composer require drupal/meilisearch
+composer config repositories.meilisearch vcs https://github.com/meilisearch/meilisearch-drupal
+composer require 'drupal/meilisearch:^1.0@alpha'
 drush en meilisearch -y
 ```
+
+Composer installs it in `web/modules/contrib/meilisearch`, with Search API and the Meilisearch PHP client. `composer update drupal/meilisearch` fetches newer releases.
 
 Optional:
 
@@ -24,3 +29,16 @@ Optional:
 composer require drupal/facets         # faceted search
 drush en meilisearch_analytics -y      # click analytics (Meilisearch Cloud)
 ```
+
+Next: connect [Meilisearch Cloud](/guides/meilisearch-cloud) or follow the [Quickstart](/quickstart).
+
+## Coming from Search API Meilisearch
+
+This module is separate from the community [Search API Meilisearch](https://www.drupal.org/project/search_api_meilisearch) module, and both can be installed at the same time. To switch:
+
+1. Install this module and add a server with the **Meilisearch** backend.
+2. Edit each index, set its **Server** to the new server and save. Search API queues all items for re-indexing.
+3. Click **Start indexing now** on each index, and check your search pages.
+4. Delete the old server and uninstall `search_api_meilisearch`.
+
+Views, facets and processors are attached to the index, not the server, so they keep working. Use an [index prefix](/guides/configuration) if the new server points at the same Meilisearch instance as the old one, so the two never write to the same index.
