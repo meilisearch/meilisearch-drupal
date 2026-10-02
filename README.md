@@ -19,6 +19,10 @@ drush en meilisearch -y
 
 Using Meilisearch Cloud? See [`docs/guides/meilisearch-cloud.mdx`](docs/guides/meilisearch-cloud.mdx).
 
+## Try it
+
+[Meili Kitchen](https://github.com/meilisearch/drupal-meilisearch-demo) is a recipe search demo built with this module: clone it and run `docker compose up --build`.
+
 ## Quick start
 
 1. **Configuration → Search and metadata → Search API → Add server**: pick the **Meilisearch** backend, enter the URL with its port (`http://127.0.0.1:7700`, or your Cloud project URL) and an API key.
