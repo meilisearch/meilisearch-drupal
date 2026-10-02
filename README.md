@@ -23,6 +23,8 @@ Using Meilisearch Cloud? See [`docs/guides/meilisearch-cloud.mdx`](docs/guides/m
 
 [Meili Kitchen](https://github.com/meilisearch/drupal-meilisearch-demo) is a recipe search demo built with this module: clone it and run `docker compose up --build`.
 
+[![Meili Kitchen: a typo-tolerant recipe search with highlights and facets](https://raw.githubusercontent.com/meilisearch/drupal-meilisearch-demo/main/docs/screenshot.png)](https://github.com/meilisearch/drupal-meilisearch-demo)
+
 ## Quick start
 
 1. **Configuration → Search and metadata → Search API → Add server**: pick the **Meilisearch** backend, enter the URL with its port (`http://127.0.0.1:7700`, or your Cloud project URL) and an API key.
