@@ -9,6 +9,9 @@ use Drupal\search_api\Query\ConditionInterface;
 
 /**
  * Parses boolean value conditions.
+ *
+ * The value is written according to the type of the field, so that a boolean
+ * condition also matches fields that store 1/0 or "1"/"".
  */
 class BooleanValueParser implements ConditionParserInterface {
 
@@ -24,7 +27,9 @@ class BooleanValueParser implements ConditionParserInterface {
    */
   public function parse(ConditionInterface $condition, IndexInterface $index): string {
     $operator = $condition->getOperator() === '<>' ? '!=' : $condition->getOperator();
-    return sprintf('%s %s %s', $condition->getField(), $operator, FilterValue::format($condition->getValue(), 'boolean'));
+    $field = $condition->getField();
+    $formatted = FilterValue::format($condition->getValue(), FilterValue::fieldType($index, $field));
+    return sprintf('%s %s %s', $field, $operator, $formatted);
   }
 
 }

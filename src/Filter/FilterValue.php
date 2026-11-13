@@ -33,9 +33,14 @@ final class FilterValue {
    * quoted string. With an unknown type, numeric values are left bare.
    *
    * Numbers that need an exponent are quoted: Meilisearch rejects a bare "+"
-   * but compares quoted numbers numerically.
+   * but compares quoted numbers numerically. A PHP boolean is written the way
+   * the field stores it: true/false on a boolean field, 1/0 on a numeric or
+   * date field and "1"/"" on a string field.
    */
   public static function format(mixed $value, ?string $type): string {
+    if (is_bool($value) && in_array($type, ['integer', 'decimal', 'date'], TRUE)) {
+      $value = (int) $value;
+    }
     switch ($type) {
       case 'boolean':
         return self::toBool($value) ? 'true' : 'false';
