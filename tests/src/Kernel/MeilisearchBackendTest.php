@@ -276,6 +276,54 @@ class MeilisearchBackendTest extends KernelTestBase {
   }
 
   /**
+   * A key with the actions the server form asks for is enough for everything.
+   */
+  public function testDocumentedKeyActionsAreSufficient(): void {
+    $server_config = &$GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config'];
+    $reset = function (): void {
+      \Drupal::configFactory()->reset();
+      \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+      \Drupal::entityTypeManager()->getStorage('search_api_index')->resetCache();
+    };
+    // The form only describes the key when settings.php does not set it.
+    $master_key = $server_config['api_key'];
+    unset($server_config['api_key']);
+    $reset();
+    $form = $this->meilisearchBackend()->buildConfigurationForm([], new FormState());
+    preg_match_all('~<em>([^<]+)</em>~', (string) $form['api_key']['#description'], $matches);
+    $actions = $matches[1];
+    $this->assertContains('search', $actions);
+
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    // Start without the index, so the key also has to create it.
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    // Not scoped to the test prefix: recent Meilisearch versions refuse an
+    // index-scoped key with the global "version" action.
+    $key = $client->createKey(['actions' => $actions, 'indexes' => ['*'], 'expiresAt' => NULL]);
+
+    try {
+      $server_config['api_key'] = (string) $key->getKey();
+      $reset();
+
+      $count = $this->indexItems($this->indexId);
+      $this->assertGreaterThan(0, $count);
+      $this->assertGreaterThan(0, Index::load($this->indexId)->query()->keys('foo')->execute()->getResultCount());
+
+      $info = $this->viewSettingsByLabel();
+      $this->assertSame('Connected', (string) $info['Connection']['info']);
+      $row = $info['Index <em class="placeholder">Test index</em>'];
+      $this->assertSame("$uid: $count documents", (string) $row['info']);
+      $this->assertArrayNotHasKey('status', $row, 'The index row is not a warning.');
+    }
+    finally {
+      $client->deleteKey((string) $key->getUid());
+      $server_config['api_key'] = $master_key;
+    }
+  }
+
+  /**
    * Results expose how long Meilisearch took.
    */
   public function testResultsExposeProcessingTime(): void {
