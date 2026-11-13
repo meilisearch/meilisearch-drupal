@@ -121,10 +121,11 @@ interface MeilisearchApiServiceInterface {
    *   How long to wait, in milliseconds.
    *
    * @return array
-   *   The finished task.
+   *   The task, which succeeded.
    *
    * @throws \Drupal\meilisearch\Api\MeilisearchApiException
-   *   When the task failed or did not finish in time.
+   *   When the task failed, was canceled (error code "task_canceled") or did
+   *   not finish in time (error code "task_timeout").
    */
   public function waitForTask(int $taskUid, int $timeoutMs = self::TASK_TIMEOUT): array;
 

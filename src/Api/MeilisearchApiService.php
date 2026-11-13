@@ -193,6 +193,13 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
         $task['error']['code'] ?? NULL,
       );
     }
+    // A canceled task wrote nothing and carries no error.
+    if (($task['status'] ?? NULL) === 'canceled') {
+      throw new MeilisearchApiException(sprintf('Meilisearch task %d was canceled.', $taskUid), 'task_canceled');
+    }
+    if (($task['status'] ?? NULL) !== 'succeeded') {
+      throw new MeilisearchApiException(sprintf('Meilisearch task %d ended with the unexpected status "%s".', $taskUid, (string) ($task['status'] ?? '')));
+    }
     return $task;
   }
 

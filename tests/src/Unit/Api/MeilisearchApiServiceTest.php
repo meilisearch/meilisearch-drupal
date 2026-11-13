@@ -77,6 +77,28 @@ class MeilisearchApiServiceTest extends TestCase {
   /**
    * @covers ::waitForTask
    */
+  public function testCanceledTaskThrows(): void {
+    $api = $this->api([
+      $this->json([
+        'uid' => 7,
+        'status' => 'canceled',
+        'canceledBy' => 9,
+        'error' => NULL,
+      ]),
+    ]);
+    try {
+      $api->waitForTask(7);
+      $this->fail('A canceled task must throw.');
+    }
+    catch (MeilisearchApiException $e) {
+      $this->assertSame('Meilisearch task 7 was canceled.', $e->getMessage());
+      $this->assertSame('task_canceled', $e->getErrorCode());
+    }
+  }
+
+  /**
+   * @covers ::waitForTask
+   */
   public function testSucceededTaskIsReturned(): void {
     $api = $this->api([$this->json(['uid' => 7, 'status' => 'succeeded'])]);
     $this->assertSame('succeeded', $api->waitForTask(7)['status']);
