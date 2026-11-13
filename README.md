@@ -37,7 +37,7 @@ Keep the API key out of configuration exports by setting it in `settings.php`:
 $config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');
 ```
 
-Use a dedicated key with the `search`, `documents.*`, `indexes.*`, `settings.*`, `tasks.get` and `version` actions rather than the master key.
+Use a dedicated key with the `search`, `documents.*`, `indexes.*`, `settings.*`, `stats.get`, `tasks.get` and `version` actions rather than the master key. The actions of a Meilisearch key cannot be edited afterwards: to add one, create a new key and replace the old one.
 
 ## Features
 

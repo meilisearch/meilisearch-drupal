@@ -13,7 +13,9 @@ title: Server configuration
 
 ## API key
 
-Create a dedicated key with these actions: `search`, `documents.*`, `indexes.*`, `settings.*`, `tasks.get`, `version`. Avoid the master key.
+Create a dedicated key with these actions: `search`, `documents.*`, `indexes.*`, `settings.*`, `stats.get`, `tasks.get`, `version`. Avoid the master key.
+
+`stats.get` is what lets the server page show the number of documents in each index. Without it, indexing and search work but the page shows *The provided API key is invalid* next to every index. The actions of a Meilisearch key cannot be edited after it is created, so a key that lacks one has to be replaced: create a new key with the full list, give it to Drupal, then delete the old one.
 
 To keep the key out of configuration exports, set it in `settings.php`:
 
