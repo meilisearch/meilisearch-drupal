@@ -129,12 +129,14 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   /**
    * {@inheritdoc}
    *
-   * A new URL, key or prefix points at other Meilisearch indexes: set them up
-   * and re-index. A new result limit only needs the settings pushed again.
+   * A new URL or prefix points at other Meilisearch indexes: set them up and
+   * re-index. A new key reaches the same indexes and a new result limit only
+   * changes a setting: both make sure the indexes are set up, which the
+   * previous key may not have been allowed to do, and push the settings again.
    *
-   * Both go through the server entity, which keeps a failure from breaking
-   * the save: it logs the error and stores a task to try again later. The
-   * re-index is queued even when Meilisearch cannot be reached yet.
+   * The calls go through the server entity, which keeps a failure from
+   * breaking the save: it logs the error and stores a task to try again later.
+   * The re-index is queued even when Meilisearch cannot be reached yet.
    */
   public function postUpdate(): bool {
     $server = $this->getServer();
@@ -146,13 +148,13 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     $old = $original->getBackendConfig();
     $changed = fn(string $key) => ($old[$key] ?? NULL) !== ($this->configuration[$key] ?? NULL);
 
-    if ($changed('url') || $changed('api_key') || $changed('index_prefix')) {
+    if ($changed('url') || $changed('index_prefix')) {
       foreach ($server->getIndexes() as $index) {
         $server->addIndex($index);
       }
       return TRUE;
     }
-    if ($changed('max_total_hits')) {
+    if ($changed('api_key') || $changed('max_total_hits')) {
       foreach ($server->getIndexes() as $index) {
         $server->updateIndex($index);
       }

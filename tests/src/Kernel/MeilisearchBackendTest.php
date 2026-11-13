@@ -298,6 +298,36 @@ class MeilisearchBackendTest extends KernelTestBase {
   }
 
   /**
+   * A new API key reaches the same indexes: nothing has to be re-indexed.
+   */
+  public function testRotatingTheApiKeyDoesNotReindex(): void {
+    $this->indexItems($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid(Index::load($this->indexId));
+    $settings_updates = $this->countSettingsUpdates($uid);
+    $client = $this->meilisearchClient();
+    $key = $client->createKey(['actions' => ['*'], 'indexes' => ['*'], 'expiresAt' => NULL]);
+
+    try {
+      // Let the form change the key: drop its override and cached copies.
+      unset($GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['api_key']);
+      \Drupal::configFactory()->reset();
+      \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+      $server = Server::load('meilisearch_test_server');
+      $server->setBackendConfig(['api_key' => (string) $key->getKey()] + $server->getBackendConfig());
+      $server->save();
+
+      $tracker = Index::load($this->indexId)->getTrackerInstance();
+      $this->assertGreaterThan(0, $tracker->getIndexedItemsCount());
+      $this->assertSame(0, $tracker->getRemainingItemsCount(), 'Items are not queued for re-indexing.');
+      $this->assertSame($settings_updates + 1, $this->countSettingsUpdates($uid), 'The settings are sent with the new key.');
+      $this->assertSame(0, $this->countServerTasks('updateIndex'), 'Nothing failed with the new key.');
+    }
+    finally {
+      $client->deleteKey((string) $key->getUid());
+    }
+  }
+
+  /**
    * Returns how many Search API tasks of a type wait for the test server.
    */
   protected function countServerTasks(string $type): int {
