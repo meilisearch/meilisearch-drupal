@@ -59,7 +59,7 @@ Synonyms, stop words, ranking rules and embedders are Meilisearch settings: mana
 - The last word matches as a prefix and typos are tolerated.
 - Conditions and facets on fulltext fields use whole field values.
 - Exact conditions on string values over about 250 bytes cannot match.
-- Random sorting is not supported; "relevance, then X" with keywords is relevance order.
+- Random sorting is not supported. With keywords, sorts placed after *Relevance* are ignored: "X, Relevance, Y" orders by X, then relevance. Without keywords, *Relevance* is skipped and the other sorts apply.
 
 Details: [`docs/reference/search-behavior.mdx`](docs/reference/search-behavior.mdx).
 
