@@ -131,6 +131,10 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
    *
    * A new URL, key or prefix points at other Meilisearch indexes: set them up
    * and re-index. A new result limit only needs the settings pushed again.
+   *
+   * Both go through the server entity, which keeps a failure from breaking
+   * the save: it logs the error and stores a task to try again later. The
+   * re-index is queued even when Meilisearch cannot be reached yet.
    */
   public function postUpdate(): bool {
     $server = $this->getServer();
@@ -144,13 +148,13 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
 
     if ($changed('url') || $changed('api_key') || $changed('index_prefix')) {
       foreach ($server->getIndexes() as $index) {
-        $this->addIndex($index);
+        $server->addIndex($index);
       }
       return TRUE;
     }
     if ($changed('max_total_hits')) {
       foreach ($server->getIndexes() as $index) {
-        $this->updateIndex($index);
+        $server->updateIndex($index);
       }
     }
     return FALSE;

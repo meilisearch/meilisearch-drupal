@@ -263,6 +263,52 @@ class MeilisearchBackendTest extends KernelTestBase {
   }
 
   /**
+   * Saving a new URL that is not reachable yet still queues the re-index.
+   */
+  public function testSavingAnUnreachableUrlQueuesReindexing(): void {
+    $this->indexItems($this->indexId);
+    $tracker = Index::load($this->indexId)->getTrackerInstance();
+    $this->assertSame(0, $tracker->getRemainingItemsCount());
+    // Let the form change the URL: drop its override and cached copies.
+    unset($GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['url']);
+    \Drupal::configFactory()->reset();
+    \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+    $server = Server::load('meilisearch_test_server');
+    $server->setBackendConfig(['url' => 'http://127.0.0.1:1'] + $server->getBackendConfig());
+    $server->save();
+
+    $tracker = Index::load($this->indexId)->getTrackerInstance();
+    $this->assertSame($tracker->getTotalItemsCount(), $tracker->getRemainingItemsCount(), 'Items are queued for re-indexing.');
+    $this->assertSame(1, $this->countServerTasks('addIndex'), 'Setting up the index is retried later.');
+  }
+
+  /**
+   * Saving a new result limit while Meilisearch is down retries it later.
+   */
+  public function testSavingTheResultLimitWhileUnreachableIsRetried(): void {
+    // The instance went away; the stored connection settings do not change.
+    $GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['url'] = 'http://127.0.0.1:1';
+    \Drupal::configFactory()->reset();
+    \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+    $server = Server::load('meilisearch_test_server');
+    $server->setBackendConfig(['max_total_hits' => 500] + $server->getBackendConfig());
+    $server->save();
+
+    $this->assertSame(1, $this->countServerTasks('updateIndex'), 'Pushing the settings is retried later.');
+  }
+
+  /**
+   * Returns how many Search API tasks of a type wait for the test server.
+   */
+  protected function countServerTasks(string $type): int {
+    return (int) \Drupal::service('search_api.task_manager')->getTasksCount([
+      'type' => $type,
+      'server_id' => 'meilisearch_test_server',
+      'index_id' => $this->indexId,
+    ]);
+  }
+
+  /**
    * Indexing recreates a Meilisearch index deleted behind Drupal's back.
    *
    * This happens when an environment's URL is overridden in settings.php and
