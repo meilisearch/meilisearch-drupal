@@ -5,4 +5,6 @@ cd /drupal
 # Show which core the suite runs on: the image can be built for Drupal 10 or 11.
 php -r 'require "web/core/lib/Drupal.php"; echo "Drupal core ", Drupal::VERSION, "\n";'
 if [ $# -eq 0 ]; then set -- web/modules/custom/meilisearch; fi
-exec vendor/bin/phpunit -c web/core/phpunit.xml.dist "$@"
+# The configuration path is absolute: on Drupal 10 (PHPUnit 9) kernel tests run
+# in child processes that start in another directory and reload this file.
+exec vendor/bin/phpunit -c /drupal/web/core/phpunit.xml.dist "$@"
