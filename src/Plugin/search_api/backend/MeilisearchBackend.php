@@ -150,9 +150,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     }
     if ($changed('max_total_hits')) {
       foreach ($server->getIndexes() as $index) {
-        if (!$index->isReadOnly()) {
-          $this->pushSettings($index);
-        }
+        $this->updateIndex($index);
       }
     }
     return FALSE;
@@ -496,7 +494,11 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     if ($index->isReadOnly()) {
       return;
     }
-    $this->pushSettings($index);
+    // A settings update alone would make Meilisearch create a missing index
+    // with its default ranking rules. Setting it up sends the settings too.
+    if (!$this->ensureIndex($index)) {
+      $this->pushSettings($index);
+    }
     // Drupal 11.2 added getOriginal(); earlier versions use the property.
     // @phpstan-ignore function.alreadyNarrowedType
     $original = method_exists($index, 'getOriginal') ? $index->getOriginal() : ($index->original ?? NULL);
@@ -836,16 +838,20 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   /**
    * Sets up the Meilisearch index if it does not exist.
    *
-   * Meilisearch would otherwise create it on the first documents, without
-   * filterable or sortable attributes. That happens when an environment
-   * points at a fresh instance through a settings.php override.
+   * Meilisearch would otherwise create it on the first documents or settings
+   * update, without filterable or sortable attributes or with its default
+   * ranking rules. That happens when an environment points at a fresh instance
+   * through a settings.php override.
+   *
+   * @return bool
+   *   TRUE if the index was missing and has been set up, settings included.
    *
    * @throws \Drupal\search_api\SearchApiException
    */
-  protected function ensureIndex(IndexInterface $index): void {
+  protected function ensureIndex(IndexInterface $index): bool {
     $uid = $this->getIndexUid($index);
     if (isset($this->existingIndexes[$uid])) {
-      return;
+      return FALSE;
     }
     try {
       $exists = $this->getApi()->indexExists($uid);
@@ -857,6 +863,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       $this->addIndex($index);
     }
     $this->existingIndexes[$uid] = TRUE;
+    return !$exists;
   }
 
   /**

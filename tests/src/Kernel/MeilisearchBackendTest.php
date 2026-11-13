@@ -11,6 +11,7 @@ use Drupal\search_api\Entity\Index;
 use Drupal\search_api\Entity\Server;
 use Drupal\search_api\SearchApiException;
 use Drupal\Tests\search_api\Functional\ExampleContentTrait;
+use Meilisearch\Contracts\TasksQuery;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
@@ -277,6 +278,53 @@ class MeilisearchBackendTest extends KernelTestBase {
     $settings = $client->index($uid)->getSettings();
     $this->assertContains('search_api_language', $settings['filterableAttributes']);
     $this->assertSame(2, Index::load($this->indexId)->query()->addCondition('type', 'article')->execute()->getResultCount(), 'Filters work on the recreated index.');
+  }
+
+  /**
+   * Saving an index sets up a missing Meilisearch index like indexing does.
+   *
+   * A settings update alone makes Meilisearch create the index with its
+   * default ranking rules, where "sort" comes after the relevancy rules.
+   */
+  public function testSavingAnIndexSetsUpMissingIndexes(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    $settings_updates = $this->countSettingsUpdates($uid);
+
+    $index->set('description', 'Saved before anything was indexed.');
+    $index->save();
+
+    $settings = $client->index($uid)->getSettings();
+    $this->assertSame('sort', $settings['rankingRules'][0], 'Explicit sorts are strict on the recreated index.');
+    $this->assertContains('search_api_language', $settings['filterableAttributes']);
+    $this->assertSame($settings_updates + 1, $this->countSettingsUpdates($uid), 'The settings are sent once.');
+  }
+
+  /**
+   * A new result limit sets up a missing Meilisearch index before pushing it.
+   */
+  public function testChangingTheResultLimitSetsUpMissingIndexes(): void {
+    $uid = $this->meilisearchBackend()->getIndexUid(Index::load($this->indexId));
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+
+    $server = Server::load('meilisearch_test_server');
+    $server->setBackendConfig(['max_total_hits' => 500] + $server->getBackendConfig());
+    $server->save();
+
+    $settings = $client->index($uid)->getSettings();
+    $this->assertSame('sort', $settings['rankingRules'][0], 'Explicit sorts are strict on the recreated index.');
+    $this->assertSame(500, $settings['pagination']['maxTotalHits']);
+  }
+
+  /**
+   * Returns how many settings updates Meilisearch received for an index.
+   */
+  protected function countSettingsUpdates(string $uid): int {
+    $query = (new TasksQuery())->setIndexUids([$uid])->setTypes(['settingsUpdate'])->setLimit(1);
+    return $this->meilisearchClient()->getTasks($query)->getTotal();
   }
 
   /**
