@@ -94,4 +94,62 @@ class MeilisearchHighlightingTest extends KernelTestBase {
     $this->assertStringContainsString('&lt;script&gt;', $excerpt);
   }
 
+  /**
+   * Private-use characters in content are not taken for highlight markers.
+   */
+  public function testContentCannotForgeHighlightMarkers(): void {
+    $this->addTestEntity(2, [
+      'name' => 'Offer',
+      'type' => 'item',
+      'body' => "Great \u{E000}deal here",
+    ]);
+    $this->addTestEntity(3, [
+      'name' => "Zebra \u{E000}title\u{E001}",
+      'type' => 'item',
+      'body' => 'nothing great',
+    ]);
+    $this->indexItems('meilisearch_test_index');
+
+    $items = Index::load('meilisearch_test_index')->query()->keys('great')->execute()->getResultItems();
+    $ids = $this->getItemIds([2, 3]);
+
+    $this->assertSame("<strong>Great</strong> \u{E000}deal here", (string) $items[$ids[0]]->getExcerpt());
+    $this->assertSame(['body'], array_keys($items[$ids[0]]->getExtraData('highlighted_fields')));
+
+    $this->assertSame('nothing <strong>great</strong>', (string) $items[$ids[1]]->getExcerpt());
+    $this->assertSame(['body'], array_keys($items[$ids[1]]->getExtraData('highlighted_fields')), 'A field without a match is not reported as highlighted.');
+  }
+
+  /**
+   * Every search uses its own markers.
+   */
+  public function testMarkersDifferBetweenSearches(): void {
+    $index = Index::load('meilisearch_test_index');
+    $markers = [];
+    foreach ([0, 1] as $i) {
+      $query = $index->query()->keys('wombat');
+      $query->execute();
+      $markers[$i] = $query->getOption('meilisearch_highlighting');
+      $this->assertNotSame($markers[$i]['pre_tag'], $markers[$i]['post_tag']);
+    }
+    $this->assertNotSame($markers[0]['pre_tag'], $markers[1]['pre_tag']);
+    $this->assertNotSame($markers[0]['post_tag'], $markers[1]['post_tag']);
+  }
+
+  /**
+   * Results of a query the processor did not prepare are left alone.
+   */
+  public function testResultsWithoutMarkersAreLeftAlone(): void {
+    $index = Index::load('meilisearch_test_index');
+    $results = $index->query()->getResults();
+    $item = \Drupal::getContainer()->get('search_api.fields_helper')->createItem($index, $this->getItemIds([1])[0]);
+    $item->setExtraData('meilisearch_formatted', ['name' => "\u{E000}Wombat\u{E001} stew"]);
+    $results->addResultItem($item);
+
+    $index->getProcessor('meilisearch_highlighting')->postprocessSearchResults($results);
+
+    $this->assertNull($item->getExcerpt());
+    $this->assertNull($item->getExtraData('highlighted_fields'));
+  }
+
 }
