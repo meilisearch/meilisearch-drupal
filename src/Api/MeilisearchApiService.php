@@ -166,7 +166,12 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
    */
   public function multiSearch(array $queries): array {
     $response = $this->post('multi-search', ['queries' => array_values($queries)]);
-    return $response['results'] ?? [];
+    $results = $response['results'] ?? NULL;
+    // Meilisearch answers with exactly one result per query.
+    if (!is_array($results) || !array_is_list($results) || count($results) !== count($queries)) {
+      throw new MeilisearchApiException(sprintf('The response to the Meilisearch "multi-search" request does not hold one result for each of the %d queries.', count($queries)));
+    }
+    return $results;
   }
 
   /**
@@ -275,6 +280,17 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
 
   /**
    * Sends a JSON POST request for routes the SDK does not cover.
+   *
+   * @param string $path
+   *   The route, relative to the instance URL.
+   * @param array $body
+   *   The request body, sent as JSON.
+   *
+   * @return array
+   *   The decoded response, or an empty array when the response has no body.
+   *
+   * @throws \Drupal\meilisearch\Api\MeilisearchApiException
+   *   When the request fails or its response has a body that is not JSON.
    */
   protected function post(string $path, array $body): array {
     $options = ['json' => $body, 'headers' => []];
@@ -291,8 +307,17 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
     catch (GuzzleException $e) {
       throw new MeilisearchApiException($e->getMessage(), NULL, $e);
     }
-    $decoded = json_decode((string) $response->getBody(), TRUE);
-    return is_array($decoded) ? $decoded : [];
+    // Some routes answer without a body. Anything else must be a JSON object
+    // or array: a proxy can answer 200 with an HTML page or cut a body short.
+    $content = trim((string) $response->getBody());
+    if ($content === '') {
+      return [];
+    }
+    $decoded = json_decode($content, TRUE);
+    if (!is_array($decoded)) {
+      throw new MeilisearchApiException(sprintf('The response to the Meilisearch "%s" request (HTTP %d) is not valid JSON.', $path, $response->getStatusCode()));
+    }
+    return $decoded;
   }
 
 }

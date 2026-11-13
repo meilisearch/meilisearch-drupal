@@ -307,6 +307,44 @@ class MeilisearchApiServiceTest extends TestCase {
   }
 
   /**
+   * A 2xx answer that is not the expected JSON must not pass as "no results".
+   *
+   * @covers ::multiSearch
+   * @covers ::post
+   */
+  public function testMultiSearchRejectsUnusableResponses(): void {
+    $responses = [
+      'HTML page' => new Response(200, ['Content-Type' => 'text/html'], '<html>Maintenance</html>'),
+      'truncated JSON' => new Response(200, ['Content-Type' => 'application/json'], '{"results":[{"hits":['),
+      'JSON scalar' => new Response(200, ['Content-Type' => 'application/json'], '"ok"'),
+      'empty body' => new Response(200),
+      'no results key' => $this->json(['hits' => []]),
+      'results not a list' => $this->json(['results' => 'none']),
+      'fewer results than queries' => $this->json(['results' => [['hits' => [], 'indexUid' => 'idx']]]),
+    ];
+    $queries = [['indexUid' => 'idx', 'q' => 'foo'], ['indexUid' => 'idx', 'q' => 'foo', 'limit' => 0]];
+    foreach ($responses as $case => $response) {
+      try {
+        $this->api([$response])->multiSearch($queries);
+        $this->fail("A multi-search answered with $case must throw.");
+      }
+      catch (MeilisearchApiException $e) {
+        $this->assertNull($e->getErrorCode(), $case);
+      }
+    }
+  }
+
+  /**
+   * @covers ::sendEvent
+   * @covers ::post
+   */
+  public function testSendEventAcceptsEmptyResponse(): void {
+    $this->api([new Response(204)])->sendEvent(['eventType' => 'click']);
+    $this->api([new Response(200, ['Content-Type' => 'application/json'], '{}')])->sendEvent(['eventType' => 'click']);
+    $this->assertCount(1, $this->history);
+  }
+
+  /**
    * @covers ::sendEvent
    */
   public function testSendEventPostsToEventsRoute(): void {
