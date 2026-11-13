@@ -121,6 +121,32 @@ class MeilisearchApiServiceTest extends TestCase {
   }
 
   /**
+   * The SDK rethrows a non-JSON answer to a deletion as a bare \Exception.
+   *
+   * @covers ::deleteDocuments
+   * @covers ::deleteDocumentsByFilter
+   * @covers ::call
+   */
+  public function testNonJsonResponseToDeletionThrowsApiException(): void {
+    $deletions = [
+      'deleteDocuments' => fn(MeilisearchApiServiceInterface $api) => $api->deleteDocuments('idx', ['a', 'b']),
+      'deleteDocumentsByFilter' => fn(MeilisearchApiServiceInterface $api) => $api->deleteDocumentsByFilter('idx', 'type = "page"'),
+    ];
+    foreach ($deletions as $method => $delete) {
+      $api = $this->api([new Response(502, ['Content-Type' => 'text/html'], '<html>Bad gateway</html>')]);
+      try {
+        $delete($api);
+        $this->fail("$method() must throw when the response is not JSON.");
+      }
+      catch (MeilisearchApiException $e) {
+        $this->assertStringContainsString('Bad gateway', $e->getMessage(), $method);
+        $this->assertStringNotContainsString('Hint:', $e->getMessage(), $method);
+        $this->assertNull($e->getErrorCode(), $method);
+      }
+    }
+  }
+
+  /**
    * @covers ::search
    */
   public function testApiErrorKeepsErrorCode(): void {

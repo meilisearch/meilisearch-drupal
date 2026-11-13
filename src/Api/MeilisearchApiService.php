@@ -214,6 +214,19 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
     catch (ExceptionInterface | ClientExceptionInterface $e) {
       throw $this->convert($e);
     }
+    catch (MeilisearchApiException $e) {
+      throw $e;
+    }
+    // Some SDK methods (deleteDocuments() for one) rethrow a response that is
+    // not JSON as a bare \Exception carrying a generic hint. The exception it
+    // wraps has the real message.
+    catch (\Exception $e) {
+      $previous = $e->getPrevious();
+      if ($previous instanceof ExceptionInterface) {
+        throw $this->convert($previous);
+      }
+      throw new MeilisearchApiException($e->getMessage(), NULL, $e);
+    }
   }
 
   /**
