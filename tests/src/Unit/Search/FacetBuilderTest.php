@@ -98,4 +98,51 @@ class FacetBuilderTest extends TestCase {
     ], $results['answer']);
   }
 
+  /**
+   * @covers ::extraQueries
+   */
+  public function testCountQueriesSearchLikeTheMainQuery(): void {
+    $hybrid = ['embedder' => 'default', 'semanticRatio' => 0.5];
+    $params = [
+      'q' => 'shoes',
+      'hybrid' => $hybrid,
+      'matchingStrategy' => 'all',
+      'attributesToSearchOn' => ['title'],
+      'filter' => 'color = "red"',
+      'page' => 2,
+      'hitsPerPage' => 10,
+    ];
+    $facets = ['color' => ['field' => 'color', 'operator' => 'or', 'min_count' => 0, 'missing' => TRUE]];
+    $builder = $this->facetBuilder($facets, ['color' => 'string'], $params);
+
+    $search = ['q' => 'shoes', 'hybrid' => $hybrid, 'matchingStrategy' => 'all', 'attributesToSearchOn' => ['title']];
+    $this->assertSame([
+      // The values of the OR facet, counted without its own filter.
+      ['indexUid' => 'uid', 'facets' => ['color'], 'limit' => 0] + $search,
+      // All the values of the field: not a search.
+      ['indexUid' => 'uid', 'facets' => ['color'], 'limit' => 0],
+      // The results without a value.
+      ['indexUid' => 'uid', 'page' => 1, 'hitsPerPage' => 0] + $search + ['filter' => '(color NOT EXISTS OR color IS NULL)'],
+    ], $builder->extraQueries('uid'));
+  }
+
+  /**
+   * @covers ::extraQueries
+   */
+  public function testKeywordCountQueriesAreNotHybrid(): void {
+    $facets = ['color' => ['field' => 'color', 'missing' => TRUE]];
+    $builder = $this->facetBuilder($facets, ['color' => 'string'], ['q' => 'shoes', 'matchingStrategy' => 'last']);
+
+    $this->assertSame([
+      [
+        'indexUid' => 'uid',
+        'page' => 1,
+        'hitsPerPage' => 0,
+        'q' => 'shoes',
+        'matchingStrategy' => 'last',
+        'filter' => '(color NOT EXISTS OR color IS NULL)',
+      ],
+    ], $builder->extraQueries('uid'));
+  }
+
 }

@@ -12,11 +12,27 @@ use Drupal\search_api\Query\QueryInterface;
 /**
  * Implements hook_meilisearch_search_params_alter().
  *
- * Adds the filter stored in the "meilisearch_test.extra_filter" state.
+ * Driven by state values, so tests choose what it does:
+ * - "meilisearch_test.extra_filter": a filter added to every query;
+ * - "meilisearch_test.vector": a query vector, for searches with a
+ *   "userProvided" embedder. Not added to the queries listing all the values
+ *   of a facet, which never search;
+ * - "meilisearch_test.record_params": when TRUE, the parameters and context
+ *   of every query are appended to "meilisearch_test.recorded_params".
  */
 function meilisearch_test_meilisearch_search_params_alter(array &$params, QueryInterface $query, array $context): void {
-  $filter = \Drupal::state()->get('meilisearch_test.extra_filter');
+  $state = \Drupal::state();
+  $filter = $state->get('meilisearch_test.extra_filter');
   if ($filter) {
     $params['filter'] = isset($params['filter']) ? "({$params['filter']}) AND ($filter)" : $filter;
+  }
+  $vector = $state->get('meilisearch_test.vector');
+  if ($vector && $context['query'] !== 'facet_all_values') {
+    $params['vector'] = $vector;
+  }
+  if ($state->get('meilisearch_test.record_params')) {
+    $recorded = $state->get('meilisearch_test.recorded_params', []);
+    $recorded[] = ['context' => $context, 'params' => $params];
+    $state->set('meilisearch_test.recorded_params', $recorded);
   }
 }
