@@ -1,6 +1,6 @@
 # Local test environment.
-#   docker compose watch                          # keep the module synced
-#   docker compose exec tests scripts/phpunit     # run the whole suite
+#   docker compose watch    # keep the module synced
+#   docker compose exec tests web/modules/custom/meilisearch/scripts/phpunit
 # or one-shot: scripts/test.sh [phpunit args]
 services:
   meilisearch:
