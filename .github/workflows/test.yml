@@ -20,10 +20,10 @@ jobs:
           - drupal: '^11'
             meilisearch: 'v1.16'
     env:
+      # Both are read by compose.yaml; scripts/test.sh builds the image.
+      DRUPAL_CORE: ${{ matrix.drupal }}
       MEILISEARCH_VERSION: ${{ matrix.meilisearch }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build test image
-        run: docker compose build --build-arg DRUPAL_CORE='${{ matrix.drupal }}' tests
       - name: Run PHPUnit
         run: scripts/test.sh

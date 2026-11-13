@@ -18,6 +18,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+      args:
+        DRUPAL_CORE: "${DRUPAL_CORE:-^11}"
     environment:
       MEILISEARCH_TEST_URL: http://meilisearch:7700
       MEILISEARCH_TEST_KEY: testMasterKey123

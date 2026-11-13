@@ -8,7 +8,10 @@ The test suite runs against a real Meilisearch, including Search API's backend c
 scripts/test.sh                        # everything
 scripts/test.sh tests/src/Unit         # a subset
 MEILISEARCH_VERSION=v1.16 scripts/test.sh
+DRUPAL_CORE='^10.3' scripts/test.sh    # another Drupal core (default ^11)
 ```
+
+Each run prints the Drupal core version it tests before the PHPUnit output.
 
 For a watch loop:
 
