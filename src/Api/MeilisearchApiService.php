@@ -30,6 +30,16 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
   protected const TASK_POLL_MAX_INTERVAL = 500;
 
   /**
+   * How long connecting may take when sending an analytics event, in seconds.
+   */
+  protected const EVENT_CONNECT_TIMEOUT = 1;
+
+  /**
+   * How long sending an analytics event may take in total, in seconds.
+   */
+  protected const EVENT_TIMEOUT = 3;
+
+  /**
    * Constructs a MeilisearchApiService.
    *
    * @param \Meilisearch\Client $client
@@ -178,7 +188,12 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
    * {@inheritdoc}
    */
   public function sendEvent(array $event): void {
-    $this->post('events', $event);
+    // Events are sent while a visitor's click request is being served. They
+    // are not worth holding a PHP worker for as long as an indexing request.
+    $this->post('events', $event, [
+      'connect_timeout' => self::EVENT_CONNECT_TIMEOUT,
+      'timeout' => self::EVENT_TIMEOUT,
+    ]);
   }
 
   /**
@@ -285,6 +300,9 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
    *   The route, relative to the instance URL.
    * @param array $body
    *   The request body, sent as JSON.
+   * @param array $options
+   *   Guzzle request options that override those of the HTTP client, for
+   *   example "timeout".
    *
    * @return array
    *   The decoded response, or an empty array when the response has no body.
@@ -292,8 +310,8 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
    * @throws \Drupal\meilisearch\Api\MeilisearchApiException
    *   When the request fails or its response has a body that is not JSON.
    */
-  protected function post(string $path, array $body): array {
-    $options = ['json' => $body, 'headers' => []];
+  protected function post(string $path, array $body, array $options = []): array {
+    $options = ['json' => $body, 'headers' => []] + $options;
     if ($this->apiKey !== '') {
       $options['headers']['Authorization'] = 'Bearer ' . $this->apiKey;
     }

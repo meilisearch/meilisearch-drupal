@@ -27,7 +27,7 @@ class MeilisearchApiServiceTest extends TestCase {
   /**
    * Requests sent through the mocked HTTP client.
    *
-   * @var array<int, array{request: \Psr\Http\Message\RequestInterface}>
+   * @var array<int, array{request: \Psr\Http\Message\RequestInterface, options: array<string, mixed>}>
    */
   protected array $history = [];
 
@@ -351,6 +351,28 @@ class MeilisearchApiServiceTest extends TestCase {
     $api = $this->api([new Response(201)]);
     $api->sendEvent(['eventType' => 'click']);
     $this->assertSame('http://meili.test:7700/events', (string) $this->history[0]['request']->getUri());
+  }
+
+  /**
+   * A click must not hold a PHP worker as long as an indexing request may.
+   *
+   * @covers ::sendEvent
+   * @covers ::multiSearch
+   */
+  public function testOnlyEventsUseShortTimeouts(): void {
+    $api = $this->api([
+      new Response(204),
+      $this->json(['results' => [['hits' => [], 'indexUid' => 'idx']]]),
+      $this->json(['hits' => []]),
+    ]);
+    $api->sendEvent(['eventType' => 'click']);
+    $api->multiSearch([['indexUid' => 'idx', 'q' => 'foo']]);
+    $api->search('idx', 'foo', []);
+    $timeouts = array_map(
+      fn(array $transaction) => [$transaction['options']['connect_timeout'], $transaction['options']['timeout']],
+      $this->history,
+    );
+    $this->assertSame([[1, 3], [5, 30], [5, 30]], $timeouts);
   }
 
   /**
