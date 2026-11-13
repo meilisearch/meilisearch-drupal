@@ -13,8 +13,10 @@ use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use Meilisearch\Client;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -112,6 +114,89 @@ class MeilisearchApiServiceTest extends TestCase {
     $this->expectException(MeilisearchApiException::class);
     $this->expectExceptionMessageMatches('/task 7/i');
     $api->waitForTask(7, 1);
+  }
+
+  /**
+   * Builds an API service with a fake clock.
+   *
+   * @param callable $answer
+   *   Receives the service and returns the response to each request. It can
+   *   move the clock forward to simulate a slow request.
+   */
+  protected function clockApi(callable $answer): FakeClockApiService {
+    $this->history = [];
+    $api = NULL;
+    $stack = HandlerStack::create(function () use (&$api, $answer) {
+      return Create::promiseFor($answer($api));
+    });
+    $stack->push(Middleware::history($this->history));
+    $url = 'http://meili.test:7700';
+    $http = (new ClientFactory($stack))->fromOptions(['base_uri' => $url . '/']);
+    $api = new FakeClockApiService(new Client($url, 'secret', $http), $http, $url, 'secret');
+    return $api;
+  }
+
+  /**
+   * The time spent in requests counts towards the timeout.
+   *
+   * @covers ::waitForTask
+   */
+  public function testTaskTimeoutCountsRequestTime(): void {
+    $api = $this->clockApi(function (FakeClockApiService $api) {
+      $api->advance(400);
+      return $this->json(['uid' => 7, 'status' => 'processing']);
+    });
+    try {
+      $api->waitForTask(7, 1000);
+      $this->fail('A task that keeps processing must time out.');
+    }
+    catch (MeilisearchApiException $e) {
+      $this->assertSame('task_timeout', $e->getErrorCode());
+      $this->assertSame('Meilisearch task 7 did not finish within 1000 ms.', $e->getMessage());
+    }
+    // Requests end at 400, 825 and 1275 ms; the last one started in time.
+    $this->assertCount(3, $this->history);
+    $this->assertEquals(1275, $api->elapsedMs());
+  }
+
+  /**
+   * @covers ::waitForTask
+   */
+  public function testTaskPollingBacksOff(): void {
+    $api = $this->clockApi(fn(FakeClockApiService $api) => $this->json([
+      'uid' => 7,
+      'status' => $api->elapsedMs() >= 3000 ? 'succeeded' : 'processing',
+    ]));
+    $this->assertSame('succeeded', $api->waitForTask(7)['status']);
+    $this->assertEquals([25, 50, 100, 200, 400, 500, 500, 500, 500, 500], $api->sleeps);
+    // A fixed 100 ms interval needs 31 requests for a 3 s task.
+    $this->assertCount(11, $this->history);
+  }
+
+  /**
+   * @covers ::waitForTask
+   */
+  public function testTaskPollingSleepIsClampedToRemainingTime(): void {
+    $api = $this->clockApi(fn() => $this->json(['uid' => 7, 'status' => 'enqueued']));
+    try {
+      $api->waitForTask(7, 60);
+      $this->fail('A task that stays enqueued must time out.');
+    }
+    catch (MeilisearchApiException $e) {
+      $this->assertSame('task_timeout', $e->getErrorCode());
+    }
+    $this->assertEquals([25, 35], $api->sleeps);
+    $this->assertCount(3, $this->history);
+  }
+
+  /**
+   * @covers ::waitForTask
+   */
+  public function testTaskIsPolledOnceWithoutTimeout(): void {
+    $api = $this->clockApi(fn() => $this->json(['uid' => 7, 'status' => 'succeeded']));
+    $this->assertSame('succeeded', $api->waitForTask(7, 0)['status']);
+    $this->assertCount(1, $this->history);
+    $this->assertSame([], $api->sleeps);
   }
 
   /**

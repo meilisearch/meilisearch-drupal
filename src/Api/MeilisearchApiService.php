@@ -10,7 +10,6 @@ use GuzzleHttp\Exception\RequestException;
 use Meilisearch\Client;
 use Meilisearch\Exceptions\ApiException;
 use Meilisearch\Exceptions\ExceptionInterface;
-use Meilisearch\Exceptions\TimeOutException;
 use Psr\Http\Client\ClientExceptionInterface;
 
 /**
@@ -19,6 +18,16 @@ use Psr\Http\Client\ClientExceptionInterface;
  * Create instances with \Drupal\meilisearch\Api\MeilisearchApiFactory.
  */
 class MeilisearchApiService implements MeilisearchApiServiceInterface {
+
+  /**
+   * The pause before the second poll of a task, in milliseconds.
+   */
+  protected const TASK_POLL_INTERVAL = 25;
+
+  /**
+   * The longest pause between two polls of a task, in milliseconds.
+   */
+  protected const TASK_POLL_MAX_INTERVAL = 500;
 
   /**
    * Constructs a MeilisearchApiService.
@@ -171,21 +180,25 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
    * {@inheritdoc}
    */
   public function waitForTask(int $taskUid, int $timeoutMs = self::TASK_TIMEOUT): array {
-    try {
-      $task = $this->client->waitForTask($taskUid, $timeoutMs, min(100, $timeoutMs));
-    }
-    catch (TimeOutException $e) {
-      throw new MeilisearchApiException(sprintf('Meilisearch task %d did not finish within %d ms.', $taskUid, $timeoutMs), 'task_timeout', $e);
-    }
-    // The SDK only declares TimeOutException, but polling the task can fail
-    // with API, network and transfer errors too.
-    // @phpstan-ignore catch.neverThrown
-    catch (ExceptionInterface $e) {
-      throw $this->convert($e);
-    }
-    // @phpstan-ignore catch.neverThrown
-    catch (ClientExceptionInterface $e) {
-      throw $this->convert($e);
+    // The SDK's own wait loop only counts the time it sleeps, not the time the
+    // requests take, so this one measures against a real deadline. A request
+    // that starts before the deadline can still end after it, by at most the
+    // HTTP timeout.
+    $deadline = $this->monotonicTime() + $timeoutMs * 1000000;
+    $interval = self::TASK_POLL_INTERVAL;
+    while (TRUE) {
+      $task = $this->call(fn() => $this->client->getTask($taskUid));
+      if (!in_array($task['status'] ?? NULL, ['enqueued', 'processing'], TRUE)) {
+        break;
+      }
+      $remaining = $deadline - $this->monotonicTime();
+      if ($remaining <= 0) {
+        throw new MeilisearchApiException(sprintf('Meilisearch task %d did not finish within %d ms.', $taskUid, $timeoutMs), 'task_timeout');
+      }
+      // Most tasks finish within milliseconds, so the first polls are quick;
+      // the interval then doubles to spare a busy instance.
+      $this->sleep(min($interval * 1000, intdiv($remaining + 999, 1000)));
+      $interval = min($interval * 2, self::TASK_POLL_MAX_INTERVAL);
     }
     if (($task['status'] ?? NULL) === 'failed') {
       throw new MeilisearchApiException(
@@ -201,6 +214,20 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
       throw new MeilisearchApiException(sprintf('Meilisearch task %d ended with the unexpected status "%s".', $taskUid, (string) ($task['status'] ?? '')));
     }
     return $task;
+  }
+
+  /**
+   * Returns a monotonic time in nanoseconds.
+   */
+  protected function monotonicTime(): int {
+    return hrtime(TRUE);
+  }
+
+  /**
+   * Pauses for a number of microseconds.
+   */
+  protected function sleep(int $microseconds): void {
+    usleep($microseconds);
   }
 
   /**

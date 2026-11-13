@@ -118,7 +118,9 @@ interface MeilisearchApiServiceInterface {
    * @param int $taskUid
    *   The task UID.
    * @param int $timeoutMs
-   *   How long to wait, in milliseconds.
+   *   How long to wait, in milliseconds of real time. The task is always
+   *   checked at least once, and a check that is under way when the time runs
+   *   out is allowed to finish.
    *
    * @return array
    *   The task, which succeeded.
