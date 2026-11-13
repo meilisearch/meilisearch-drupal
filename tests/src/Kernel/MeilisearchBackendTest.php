@@ -9,6 +9,7 @@ use Drupal\Core\Form\FormState;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\search_api\Entity\Index;
 use Drupal\search_api\Entity\Server;
+use Drupal\search_api\Query\QueryInterface;
 use Drupal\search_api\SearchApiException;
 use Drupal\Tests\search_api\Functional\ExampleContentTrait;
 use Meilisearch\Contracts\TasksQuery;
@@ -153,6 +154,46 @@ class MeilisearchBackendTest extends KernelTestBase {
     $item = current($results->getResultItems());
     $this->assertGreaterThan(0, $item->getScore());
     $this->assertLessThanOrEqual(1, $item->getScore());
+  }
+
+  /**
+   * With keywords, sorts placed after relevance must not outrank it.
+   *
+   * Sorts are strict in the indexes this module creates, so a sort sent after
+   * the position of relevance would order the results before relevance does.
+   */
+  public function testSortsAfterRelevanceAreNotSentWithKeywords(): void {
+    $sorts = function (?string $keys, array $fields): array {
+      $query = Index::load($this->indexId)->query();
+      if ($keys !== NULL) {
+        $query->keys($keys);
+      }
+      foreach ($fields as $field => $direction) {
+        $query->sort($field, $direction);
+      }
+      $build = new \ReflectionMethod($this->meilisearchBackend(), 'buildSorts');
+      return $build->invoke($this->meilisearchBackend(), $query);
+    };
+
+    $this->assertSame(['id:desc'], $sorts('foo', [
+      'id' => QueryInterface::SORT_DESC,
+      'search_api_relevance' => QueryInterface::SORT_DESC,
+      'created' => QueryInterface::SORT_ASC,
+    ]), 'Sorts after relevance are dropped.');
+    $this->assertSame([], $sorts('foo', [
+      'search_api_relevance' => QueryInterface::SORT_DESC,
+      'created' => QueryInterface::SORT_ASC,
+    ]), 'Relevance first means relevance order.');
+    $this->assertSame(['id:desc', 'created:asc'], $sorts(NULL, [
+      'id' => QueryInterface::SORT_DESC,
+      'search_api_relevance' => QueryInterface::SORT_DESC,
+      'created' => QueryInterface::SORT_ASC,
+    ]), 'Without keywords relevance orders nothing and is skipped.');
+    $this->assertSame(['id:desc', 'created:asc'], $sorts('foo', [
+      'id' => QueryInterface::SORT_DESC,
+      'search_api_random' => QueryInterface::SORT_ASC,
+      'created' => QueryInterface::SORT_ASC,
+    ]), 'An unsupported random sort is skipped.');
   }
 
   /**

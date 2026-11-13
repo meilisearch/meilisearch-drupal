@@ -745,16 +745,20 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     $index = $query->getIndex();
     $location = $this->getLocationOption($query);
     $sorts = [];
-    $query_sorts = $query->getSorts();
-    // "Relevance, then X" with keys means relevance order: sorts are strict
-    // in the indexes this module creates, so X must not be sent.
-    if (array_key_first($query_sorts) === 'search_api_relevance' && $query->getKeys()) {
-      return [];
-    }
-    foreach ($query_sorts as $field => $direction) {
+    foreach ($query->getSorts() as $field => $direction) {
       $direction = strtolower((string) $direction) === 'desc' ? 'desc' : 'asc';
-      if ($field === 'search_api_relevance' || $field === 'search_api_random') {
-        // Relevance is Meilisearch's default order; random is not supported.
+      if ($field === 'search_api_relevance') {
+        // Relevance is the order Meilisearch applies after the sorts. Sorts
+        // are strict in the indexes this module creates, so with keys the
+        // ones after relevance would outrank it and must not be sent. Without
+        // keys relevance orders nothing and is skipped.
+        if ($query->getKeys()) {
+          break;
+        }
+        continue;
+      }
+      if ($field === 'search_api_random') {
+        // Random order is not supported.
         continue;
       }
       if ($index->getField($field)?->getType() === 'location') {
