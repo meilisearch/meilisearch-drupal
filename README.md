@@ -51,7 +51,7 @@ Use a dedicated key with the `search`, `documents.*`, `indexes.*`, `settings.*`,
 - `meilisearch_analytics` submodule: click analytics on Meilisearch Cloud
 - `hook_meilisearch_search_params_alter()` and `hook_meilisearch_request_headers_alter()`
 
-Synonyms, stop words, ranking rules and embedders are Meilisearch settings: manage them in the Cloud dashboard, the CLI or the API. The module only sends the attribute lists, pagination and faceting limits, and makes `sort` the first ranking rule of the indexes it creates so explicit sorts are strict.
+Synonyms, stop words, ranking rules and embedders are Meilisearch settings: manage them in the Cloud dashboard, the CLI or the API. The module only sends the attribute lists (searchable, filterable, sortable, and displayed, which it always resets to all attributes so it can read result IDs and highlights), pagination and faceting limits, and makes `sort` the first ranking rule of the indexes it creates so explicit sorts are strict.
 
 ## How searches differ from the Database backend
 

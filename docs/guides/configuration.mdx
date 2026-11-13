@@ -33,7 +33,9 @@ Read-only indexes are never created and their settings never changed: use them t
 
 ## What the module manages
 
-On every index save the module sends the searchable, filterable and sortable attributes, `pagination.maxTotalHits`, and faceting settings (1,000 values per facet, ranked by count). When it creates an index it also puts the `sort` ranking rule first, so explicit sorts are strict. It never touches synonyms, stop words, typo tolerance or embedders, nor the ranking rules of existing indexes.
+On every index save the module sends the searchable, filterable, sortable and displayed attributes, `pagination.maxTotalHits`, and faceting settings (1,000 values per facet, ranked by count). When it creates an index it also puts the `sort` ranking rule first, so explicit sorts are strict. It never touches synonyms, stop words, typo tolerance or embedders, nor the ranking rules of existing indexes.
+
+The displayed attributes are always set to all of them (`displayedAttributes: ["*"]`), because the module needs `search_api_id` returned to load results and the highlighted fields returned to build excerpts. A restriction set by hand in Meilisearch is therefore reset the next time the module sends settings: on an index save, and when the server's maximum number of results, URL, key or index prefix changes. To expose only some fields to another client, give it an index of its own rather than restricting this one.
 
 ## Discouraged processors
 

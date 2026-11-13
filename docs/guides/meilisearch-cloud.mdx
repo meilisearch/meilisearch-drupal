@@ -86,7 +86,7 @@ To let an environment search production's data without writing to it, use produc
 
 ## Relevancy settings
 
-The module manages which attributes are searchable, filterable and sortable. Synonyms, stop words, typo tolerance, ranking rules and embedders stay in Meilisearch: edit them in the Cloud dashboard, which the server edit form links to.
+The module manages which attributes are searchable, filterable and sortable, and keeps every attribute displayed: it needs `search_api_id` and the highlighted fields returned, so a `displayedAttributes` restriction made in the dashboard is reset the next time it sends settings (see [What the module manages](/guides/configuration#what-the-module-manages)). Synonyms, stop words, typo tolerance, ranking rules and embedders stay in Meilisearch: edit them in the Cloud dashboard, which the server edit form links to.
 
 Cloud also enables [click analytics](/guides/analytics) and [semantic search](/guides/semantic-search).
 
