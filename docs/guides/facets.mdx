@@ -13,4 +13,28 @@ Supported facet options:
 
 Extra computations (OR facets, zero counts, missing values) run in the same multi-search request as the results.
 
-Meilisearch returns at most 1,000 values per facet. Facets on fulltext fields count whole field values, not words.
+Meilisearch returns at most 1,000 values per facet, the most frequent first. Facets on fulltext fields count whole field values, not words.
+
+## Date, granular and range facets
+
+The backend returns one count per distinct raw value. Facets builds the buckets of these query types itself, from those values:
+
+- **Date** facets (grouped by year, month, day and so on).
+- **Granular** numeric facets (buckets such as 0-10, 10-20).
+- **Range** facets, including the slider widget.
+
+Facets can only add up the values it receives. If a field has more than 1,000 distinct values in the current results (after filters), some values are missing:
+
+- Bucket counts are too low, and whole buckets can disappear. Meilisearch does not keep a random sample of values, so on a date facet whole years can be missing, not just undercounted.
+- A slider whose bounds are **Based on search result** can show the wrong minimum and maximum.
+
+No error or warning is shown.
+
+<Warning>Dates are indexed as Unix timestamps in seconds, so a field such as the content creation date has about one distinct value per item. A date facet on it is wrong as soon as a search matches more than 1,000 items. A date-only field has one value per day, so it hits the limit after about 1,000 distinct days.</Warning>
+
+Filtering is not affected: an active date or range filter runs in Meilisearch and matches every result. Only the facet values and counts shown are wrong.
+
+To avoid this, keep the number of distinct values below 1,000:
+
+- **Index a coarser value for dates.** In the index **Fields** tab, add a **Custom value** field (from the Search API **Custom value** processor) set to a date token with a coarse format, for example `[node:created:custom:Y-m]` for the month or `[node:created:custom:Y]` for the year. Keep its type as **String** and create a normal list facet on it instead of a date facet. 1,000 months is more than 80 years.
+- **Use fixed slider bounds.** In the slider widget settings, set the minimum and maximum value types to **Fixed value** and enter the bounds, so they do not depend on the returned values.
