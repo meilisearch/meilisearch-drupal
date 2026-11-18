@@ -22,7 +22,7 @@ use Symfony\Component\HttpFoundation\Response;
 class ClickController implements ContainerInjectionInterface {
 
   /**
-   * Clicks accepted per client and window.
+   * Clicks accepted per client IP and window.
    */
   public const FLOOD_THRESHOLD = 60;
 
@@ -70,7 +70,6 @@ class ClickController implements ContainerInjectionInterface {
     if (!$this->flood->isAllowed('meilisearch_analytics.click', self::FLOOD_THRESHOLD, self::FLOOD_WINDOW)) {
       return new Response('', Response::HTTP_TOO_MANY_REQUESTS);
     }
-    $this->flood->register('meilisearch_analytics.click', self::FLOOD_WINDOW);
 
     $data = json_decode($request->getContent(), TRUE);
     if (!is_array($data)
@@ -80,6 +79,9 @@ class ClickController implements ContainerInjectionInterface {
       || !is_int($data['position'] ?? NULL) || $data['position'] < 0) {
       return new Response('', Response::HTTP_BAD_REQUEST);
     }
+    // Only well-formed clicks count, so malformed requests from the same IP
+    // do not use up the limit of real clicks.
+    $this->flood->register('meilisearch_analytics.click', self::FLOOD_WINDOW);
 
     $index = $this->entityTypeManager->getStorage('search_api_index')->load($data['index']);
     // Unknown indexes are not logged: anyone can send any index ID.

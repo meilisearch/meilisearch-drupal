@@ -415,9 +415,23 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   }
 
   /**
-   * Clicks are rate limited per client.
+   * Clicks are rate limited per client IP.
    */
   public function testClicksAreRateLimited(): void {
+    for ($i = 0; $i < 60; $i++) {
+      $this->assertSame(204, $this->postClick($this->validClick())->getStatusCode());
+    }
+    $this->assertSame(429, $this->postClick($this->validClick())->getStatusCode());
+    $this->assertSame(429, $this->postClick('not json')->getStatusCode());
+  }
+
+  /**
+   * Malformed requests do not use up the rate limit of valid clicks.
+   */
+  public function testInvalidClicksAreNotCounted(): void {
+    for ($i = 0; $i < 61; $i++) {
+      $this->assertSame(400, $this->postClick('not json')->getStatusCode());
+    }
     for ($i = 0; $i < 60; $i++) {
       $this->assertSame(204, $this->postClick($this->validClick())->getStatusCode());
     }
