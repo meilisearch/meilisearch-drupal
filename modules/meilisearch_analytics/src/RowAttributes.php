@@ -9,8 +9,9 @@ use Drupal\meilisearch\Utility\MeilisearchUtils;
 use Drupal\search_api\Plugin\views\query\SearchApiQuery;
 
 /**
- * Adds the click-tracking attributes to rows of Meilisearch search views.
+ * Adds the click-tracking attributes to rows of Meilisearch Cloud views.
  *
+ * Views on other servers are left alone: their clicks could not be recorded.
  * Supports the "Unformatted list" and "HTML list" styles.
  */
 class RowAttributes {
@@ -18,7 +19,10 @@ class RowAttributes {
   /**
    * Constructs a RowAttributes service.
    */
-  public function __construct(protected KillSwitch $pageCacheKillSwitch) {}
+  public function __construct(
+    protected KillSwitch $pageCacheKillSwitch,
+    protected CloudServers $cloudServers,
+  ) {}
 
   /**
    * Applies the attributes to the preprocess variables of a views style.
@@ -30,7 +34,7 @@ class RowAttributes {
       return;
     }
     $index = $query->getIndex();
-    if (!$index->hasValidServer() || $index->getServerInstance()->getBackendId() !== 'meilisearch') {
+    if (!$this->cloudServers->isCloudIndex($index)) {
       return;
     }
     $query_uid = $query->getSearchApiResults()?->getExtraData('meilisearch_query_uid');

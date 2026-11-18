@@ -4,15 +4,27 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\meilisearch\Kernel;
 
+use Drupal\Core\Cache\Cache;
+use Drupal\Core\Cache\CacheableDependencyInterface;
+use Drupal\Core\PageCache\ResponsePolicy\KillSwitch;
+use Drupal\Core\PageCache\ResponsePolicyInterface;
+use Drupal\Core\Session\UserSession;
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\meilisearch\Api\MeilisearchApiFactory;
+use Drupal\meilisearch\Api\MeilisearchApiServiceInterface;
 use Drupal\search_api\Entity\Index;
 use Drupal\Tests\search_api\Functional\ExampleContentTrait;
 use Drupal\views\Views;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Tests the Meilisearch analytics submodule.
+ *
+ * The instance under test is self-hosted. Tests of the Meilisearch Cloud
+ * behaviour call useCloud(), which makes its API service answer isCloud()
+ * with TRUE and record events instead of sending them.
  *
  * @group meilisearch
  */
@@ -41,11 +53,31 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   ];
 
   /**
+   * Whether the test server poses as a Meilisearch Cloud project.
+   */
+  protected bool $cloud = FALSE;
+
+  /**
+   * The extra HTTP headers of each API service created during the test.
+   *
+   * @var array<int, array<string, string>>
+   */
+  protected array $requestHeaders = [];
+
+  /**
+   * The analytics events sent during the test.
+   *
+   * @var array<int, array<string, mixed>>
+   */
+  protected array $sentEvents = [];
+
+  /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
     $this->setUpMeilisearchConnection(['meilisearch_test_server']);
     parent::setUp();
+    $this->decorateApiFactory();
     $this->installSchema('search_api', ['search_api_item']);
     $this->installEntitySchema('entity_test_mulrev_changed');
     $this->installEntitySchema('search_api_task');
@@ -54,6 +86,9 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
     $this->setUpExampleStructure();
     $this->insertExampleContent();
     $this->indexItems('meilisearch_test_index');
+    // Messages shown while setting up have triggered the page cache kill
+    // switch: give the code under test a new one.
+    $this->container->set('page_cache_kill_switch', new KillSwitch());
   }
 
   /**
@@ -65,21 +100,154 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   }
 
   /**
-   * Skips the test when the instance does not return search metadata.
+   * Replaces the API factory with one whose services can pose as Cloud.
    *
-   * Older Meilisearch versions ignore the Meili-Include-Metadata header.
+   * The services it returns are the real ones, talking to the instance under
+   * test, except for two methods: isCloud() answers with $this->cloud, and
+   * sendEvent() records the event instead of calling the events route, which
+   * only Meilisearch Cloud has.
    */
-  protected function requireSearchMetadata(): void {
-    $results = Index::load('meilisearch_test_index')->query()->keys('foo')->execute();
-    if ($results->getExtraData('meilisearch_query_uid') === NULL) {
-      $this->markTestSkipped('This Meilisearch version does not return search metadata.');
+  protected function decorateApiFactory(): void {
+    $real_factory = $this->container->get('meilisearch.api_factory');
+    $factory = $this->createStub(MeilisearchApiFactory::class);
+    $factory->method('create')->willReturnCallback(function (string $url, string $api_key, array $headers = []) use ($real_factory): MeilisearchApiServiceInterface {
+      $this->requestHeaders[] = $headers;
+      $real_api = $real_factory->create($url, $api_key, $headers);
+      $api = $this->createStub(MeilisearchApiServiceInterface::class);
+      foreach (get_class_methods(MeilisearchApiServiceInterface::class) as $method) {
+        $api->method($method)->willReturnCallback(match ($method) {
+          'isCloud' => fn(): bool => $this->cloud,
+          'sendEvent' => function (array $event): void {
+            $this->sentEvents[] = $event;
+          },
+          default => fn(...$arguments) => $real_api->$method(...$arguments),
+        });
+      }
+      return $api;
+    });
+    $this->container->set('meilisearch.api_factory', $factory);
+  }
+
+  /**
+   * Makes the test server pose as a Meilisearch Cloud project from now on.
+   */
+  protected function useCloud(): void {
+    $this->cloud = TRUE;
+    $this->requestHeaders = [];
+    // Servers keep their API service: load them again so a new one is made.
+    foreach (['search_api_server', 'search_api_index'] as $entity_type_id) {
+      $this->container->get('entity_type.manager')->getStorage($entity_type_id)->resetCache();
     }
   }
 
   /**
-   * Searches ask Meilisearch for their query UID.
+   * Skips the test when the Meilisearch version has no search metadata.
+   *
+   * Meilisearch answers the Meili-Include-Metadata header with the query UID
+   * from v1.24.0; older versions ignore it. The decision comes from the
+   * server version, not from the search response, so a version that should
+   * return the UID but does not makes the test fail.
    */
-  public function testSearchesReturnTheQueryUid(): void {
+  protected function requireSearchMetadata(): void {
+    $version = (string) $this->meilisearchClient()->version()['pkgVersion'];
+    // Drop pre-release and build suffixes, e.g. "1.24.0-rc.1".
+    preg_match('/^\d+\.\d+\.\d+/', $version, $match);
+    $this->assertNotEmpty($match, "Unexpected Meilisearch version \"$version\".");
+    if (version_compare($match[0], '1.24.0', '<')) {
+      $this->markTestSkipped("Meilisearch $version does not return search metadata.");
+    }
+  }
+
+  /**
+   * Returns the analytics headers of the API services created so far.
+   *
+   * @return string[]
+   *   Header names.
+   */
+  protected function sentAnalyticsHeaders(): array {
+    $names = array_keys(array_merge(...$this->requestHeaders));
+    return array_values(array_intersect($names, ['Meili-Include-Metadata', 'X-MS-USER-ID']));
+  }
+
+  /**
+   * Returns whether the page cache kill switch was triggered.
+   */
+  protected function pageCacheIsKilled(): bool {
+    return $this->container->get('page_cache_kill_switch')->check(new Response(), Request::create('/')) === ResponsePolicyInterface::DENY;
+  }
+
+  /**
+   * Makes the test view cache its results and output by cache tags.
+   */
+  protected function cacheTestView(): void {
+    $view_config = $this->config('views.view.meilisearch_test_view');
+    $view_config->set('display.default.display_options.cache', ['type' => 'search_api_tag', 'options' => []])->save();
+  }
+
+  /**
+   * Renders the test view.
+   *
+   * @return array{0: string, 1: array}
+   *   The HTML and the rendered build.
+   */
+  protected function renderTestView(): array {
+    $build = Views::getView('meilisearch_test_view')->preview();
+    $html = (string) $this->container->get('renderer')->renderRoot($build);
+    return [$html, $build];
+  }
+
+  /**
+   * Searches on self-hosted servers are not tracked and stay cacheable.
+   */
+  public function testSelfHostedSearchesAreLeftAlone(): void {
+    $this->container->get('current_user')->setAccount(new UserSession(['uid' => 2]));
+    // Load the server again, so its API service is made for this user.
+    $this->container->get('entity_type.manager')->getStorage('search_api_server')->resetCache();
+    $this->container->get('entity_type.manager')->getStorage('search_api_index')->resetCache();
+    $query = Index::load('meilisearch_test_index')->query()->keys('foo');
+    $results = $query->execute();
+
+    $this->assertGreaterThan(0, $results->getResultCount());
+    $this->assertSame([], $this->sentAnalyticsHeaders());
+    $this->assertNull($results->getExtraData('meilisearch_query_uid'));
+    $this->assertInstanceOf(CacheableDependencyInterface::class, $query);
+    $this->assertSame(Cache::PERMANENT, $query->getCacheMaxAge());
+  }
+
+  /**
+   * Views on self-hosted servers get no tracking and stay cacheable.
+   */
+  public function testSelfHostedViewRowsAreLeftAlone(): void {
+    // Without a cache plugin, Views itself makes the display uncacheable.
+    $this->cacheTestView();
+    [$html, $build] = $this->renderTestView();
+
+    $this->assertStringContainsString('views-row', $html);
+    $this->assertStringNotContainsString('data-meilisearch-', $html);
+    $this->assertNotContains('meilisearch_analytics/click_tracking', $build['#attached']['library'] ?? []);
+    $this->assertNotSame(0, $build['#cache']['max-age'] ?? Cache::PERMANENT);
+    $this->assertFalse($this->pageCacheIsKilled());
+  }
+
+  /**
+   * Searches on Meilisearch Cloud ask for metadata and are not cached.
+   */
+  public function testCloudSearchesAskForMetadata(): void {
+    $this->container->get('current_user')->setAccount(new UserSession(['uid' => 2]));
+    $this->useCloud();
+    $query = Index::load('meilisearch_test_index')->query()->keys('foo');
+    $query->execute();
+
+    $this->assertSame(['Meili-Include-Metadata', 'X-MS-USER-ID'], $this->sentAnalyticsHeaders());
+    $this->assertInstanceOf(CacheableDependencyInterface::class, $query);
+    $this->assertSame(0, $query->getCacheMaxAge());
+  }
+
+  /**
+   * Searches on Meilisearch Cloud return their query UID.
+   */
+  public function testCloudSearchesReturnTheQueryUid(): void {
+    $this->useCloud();
     $this->requireSearchMetadata();
     $results = Index::load('meilisearch_test_index')->query()->keys('foo')->execute();
     $this->assertMatchesRegularExpression('/^[0-9a-f-]{36}$/', (string) $results->getExtraData('meilisearch_query_uid'));
@@ -88,11 +256,10 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   /**
    * Result rows carry what the click tracker needs, and are not cached.
    */
-  public function testViewRowsCarryAnalyticsAttributes(): void {
+  public function testCloudViewRowsCarryAnalyticsAttributes(): void {
+    $this->useCloud();
     $this->requireSearchMetadata();
-    $view = Views::getView('meilisearch_test_view');
-    $build = $view->preview();
-    $html = (string) \Drupal::service('renderer')->renderRoot($build);
+    [$html, $build] = $this->renderTestView();
 
     $this->assertSame(5, substr_count($html, 'data-meilisearch-object-id="'));
     $this->assertStringContainsString('data-meilisearch-object-id="entity_3Aentity__test__mulrev__changed_2F1_3Aen"', $html);
@@ -102,21 +269,20 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
     $this->assertMatchesRegularExpression('/data-meilisearch-query-uid="[0-9a-f-]{36}"/', $html);
     $this->assertContains('meilisearch_analytics/click_tracking', $build['#attached']['library']);
     $this->assertSame(0, $build['#cache']['max-age']);
+    $this->assertTrue($this->pageCacheIsKilled());
   }
 
   /**
    * Cached view results must not replay an old query UID.
    */
-  public function testCachedViewsGetFreshQueryUids(): void {
+  public function testCloudCachedViewsGetFreshQueryUids(): void {
+    $this->useCloud();
     $this->requireSearchMetadata();
-    $view_config = \Drupal::configFactory()->getEditable('views.view.meilisearch_test_view');
-    $view_config->set('display.default.display_options.cache', ['type' => 'search_api_tag', 'options' => []])->save();
+    $this->cacheTestView();
 
     $uids = [];
     for ($run = 0; $run < 2; $run++) {
-      $view = Views::getView('meilisearch_test_view');
-      $build = $view->preview();
-      $html = (string) \Drupal::service('renderer')->renderRoot($build);
+      [$html] = $this->renderTestView();
       preg_match('/data-meilisearch-query-uid="([0-9a-f-]{36})"/', $html, $match);
       $uids[] = $match[1] ?? NULL;
     }
@@ -139,6 +305,26 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
    */
   public function testClickOnSelfHostedIsAccepted(): void {
     $this->assertSame(204, $this->postClick($this->validClick())->getStatusCode());
+    $this->assertSame([], $this->sentEvents);
+  }
+
+  /**
+   * Clicks on Meilisearch Cloud results are sent as events.
+   */
+  public function testClickOnCloudIsSent(): void {
+    $this->useCloud();
+    $this->assertSame(202, $this->postClick($this->validClick())->getStatusCode());
+    $this->assertSame([
+      [
+        'eventType' => 'click',
+        'eventName' => 'Search Result Clicked',
+        'queryUid' => '01a0f434-50d7-7083-a0c7-33f3febe3cd7',
+        'objectId' => 'entity_3Aentity__test__mulrev__changed_2F1_3Aen',
+        'position' => 0,
+        'indexUid' => $this->meilisearchBackend()->getIndexUid('meilisearch_test_index'),
+        'userId' => 'anonymous',
+      ],
+    ], $this->sentEvents);
   }
 
   /**

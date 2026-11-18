@@ -12,9 +12,13 @@ use Drupal\search_api\ServerInterface;
 /**
  * Implements hook_meilisearch_request_headers_alter().
  *
- * Asks Meilisearch for the query UID of searches, and tells it who searches.
+ * Asks Meilisearch Cloud for the query UID of searches, and tells it who
+ * searches. Other servers have no analytics and get no extra header.
  */
 function meilisearch_analytics_meilisearch_request_headers_alter(array &$headers, ?ServerInterface $server): void {
+  if (!\Drupal::service('meilisearch_analytics.cloud_servers')->isCloudServer($server)) {
+    return;
+  }
   $headers['Meili-Include-Metadata'] = 'true';
   $user_id = \Drupal::service('meilisearch_analytics.user_id')->getUserId();
   if ($user_id !== NULL) {
