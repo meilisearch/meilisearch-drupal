@@ -133,6 +133,20 @@ class FilterBuilderTest extends TestCase {
   }
 
   /**
+   * FALSE on a string field is rejected with a range operator.
+   *
+   * @covers ::build
+   */
+  public function testFalseOnStringFieldWithRangeOperatorThrows(): void {
+    $group = new ConditionGroup('AND');
+    $group->addCondition('genre', FALSE, '>=');
+
+    $this->expectException(MeilisearchFilterException::class);
+    $this->expectExceptionMessageMatches('/"genre" with operator ">="/');
+    $this->build($group);
+  }
+
+  /**
    * @covers ::build
    */
   public function testSpecialFieldsAreFilterable(): void {
