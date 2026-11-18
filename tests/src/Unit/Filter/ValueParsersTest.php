@@ -93,8 +93,56 @@ class ValueParsersTest extends TestCase {
       'integer' => ['integer', '1', '0'],
       'decimal' => ['decimal', '1', '0'],
       'date' => ['date', '1', '0'],
-      'string' => ['string', '"1"', '""'],
-      'text' => ['text', '"1"', '""'],
+    ];
+  }
+
+  /**
+   * FALSE on a string field matches the empty string it is stored as.
+   *
+   * Meilisearch never matches "" with "=", so the parser uses IS EMPTY.
+   *
+   * @dataProvider stringFieldTypeProvider
+   */
+  public function testFalseOnStringFieldUsesIsEmpty(string $type): void {
+    $parser = new BooleanValueParser();
+    $index = $this->createIndex(['flag' => $type]);
+
+    $this->assertSame('flag IS EMPTY', $parser->parse(new Condition('flag', FALSE, '='), $index));
+    $this->assertSame('flag IS NOT EMPTY', $parser->parse(new Condition('flag', FALSE, '<>'), $index));
+    $this->assertSame('flag IS NOT EMPTY', $parser->parse(new Condition('flag', FALSE, '!='), $index));
+    $this->assertSame('flag = "1"', $parser->parse(new Condition('flag', TRUE, '='), $index));
+    $this->assertSame('flag != "1"', $parser->parse(new Condition('flag', TRUE, '<>'), $index));
+    $this->assertSame('flag > "1"', $parser->parse(new Condition('flag', TRUE, '>'), $index));
+  }
+
+  /**
+   * FALSE on a string field cannot be used with a range operator.
+   *
+   * Meilisearch does not compare the empty string: "<=" and ">=" would leave
+   * out the items that store it. The condition is not supported, so the
+   * filter builder rejects it instead of returning wrong results.
+   *
+   * @dataProvider stringFieldTypeProvider
+   */
+  public function testFalseOnStringFieldRejectsRangeOperators(string $type): void {
+    $parser = new BooleanValueParser();
+    $index = $this->createIndex(['flag' => $type]);
+
+    foreach (['<', '<=', '>', '>='] as $operator) {
+      $this->assertFalse($parser->supports(new Condition('flag', FALSE, $operator), $index), $operator);
+      $this->assertTrue($parser->supports(new Condition('flag', TRUE, $operator), $index), $operator);
+    }
+    $this->assertTrue($parser->supports(new Condition('flag', FALSE, '='), $index));
+    $this->assertTrue($parser->supports(new Condition('flag', FALSE, '<>'), $index));
+  }
+
+  /**
+   * Provides field types stored as strings.
+   */
+  public static function stringFieldTypeProvider(): array {
+    return [
+      'string' => ['string'],
+      'text' => ['text'],
     ];
   }
 
