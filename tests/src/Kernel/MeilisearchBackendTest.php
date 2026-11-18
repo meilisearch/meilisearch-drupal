@@ -9,6 +9,7 @@ use Drupal\Core\Form\FormState;
 use Drupal\Core\Http\ClientFactory;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\meilisearch\Api\MeilisearchApiFactory;
+use Drupal\meilisearch\Plugin\search_api\backend\MeilisearchBackend;
 use Drupal\search_api\Entity\Index;
 use Drupal\search_api\Entity\Server;
 use Drupal\search_api\Query\QueryInterface;
@@ -295,6 +296,7 @@ class MeilisearchBackendTest extends KernelTestBase {
     $server = $storage->loadOverrideFree('meilisearch_test_server');
     $this->assertInstanceOf(Server::class, $server);
     $backend = $server->getBackend();
+    $this->assertInstanceOf(MeilisearchBackend::class, $backend);
     $this->assertSame('http://stored.example:7700', $backend->getConfiguration()['url'], 'The form sees the stored URL.');
 
     $form_state = new FormState();
