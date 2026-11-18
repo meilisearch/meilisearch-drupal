@@ -13,7 +13,9 @@ title: Server configuration
 
 ## API key
 
-Create a dedicated key with these actions: `search`, `documents.*`, `indexes.*`, `settings.*`, `tasks.get`, `version`. Avoid the master key.
+Create a dedicated key with these actions: `search`, `documents.*`, `indexes.*`, `settings.*`, `stats.get`, `tasks.get`, `version`. Avoid the master key.
+
+`stats.get` is what lets the server page show the number of documents in each index. Without it, indexing and search work but the page shows *The provided API key is invalid* next to every index. The actions of a Meilisearch key cannot be edited after it is created, so a key that lacks one has to be replaced: create a new key with the full list, give it to Drupal, then delete the old one.
 
 To keep the key out of configuration exports, set it in `settings.php`:
 
@@ -31,7 +33,9 @@ Read-only indexes are never created and their settings never changed: use them t
 
 ## What the module manages
 
-On every index save the module sends the searchable, filterable and sortable attributes, `pagination.maxTotalHits`, and faceting settings (1,000 values per facet, ranked by count). When it creates an index it also puts the `sort` ranking rule first, so explicit sorts are strict. It never touches synonyms, stop words, typo tolerance or embedders, nor the ranking rules of existing indexes.
+On every index save the module sends the searchable, filterable, sortable and displayed attributes, `pagination.maxTotalHits`, and faceting settings (1,000 values per facet, ranked by count). When it creates an index it also puts the `sort` ranking rule first, so explicit sorts are strict. It never touches synonyms, stop words, typo tolerance or embedders, nor the ranking rules of existing indexes.
+
+The displayed attributes are always set to all of them (`displayedAttributes: ["*"]`), because the module needs `search_api_id` returned to load results and the highlighted fields returned to build excerpts. A restriction set by hand in Meilisearch is therefore reset the next time the module sends settings: on an index save, and when the server's maximum number of results, URL, key or index prefix changes. To expose only some fields to another client, give it an index of its own rather than restricting this one.
 
 ## Discouraged processors
 

@@ -20,7 +20,8 @@ description: How Search API queries map to Meilisearch, and where results differ
 ## Sorting
 
 - Sorts are strict on indexes created by this module. On indexes created elsewhere, whether they are strict depends on where the `sort` ranking rule sits.
-- *Relevance* is Meilisearch's order. When relevance comes first and the search has keywords, later sorts are ignored.
+- *Relevance* is Meilisearch's order. When the search has keywords, sorts placed before *Relevance* apply strictly and relevance orders the results within them; sorts placed after it are ignored, because Meilisearch cannot break relevance ties with a sort while `sort` is the first ranking rule. "Sticky, Relevance, Authored on" therefore orders by sticky, then relevance.
+- Without keywords there is no relevance to order by: *Relevance* is skipped and the other sorts apply in the order given.
 - Random sorting is not supported.
 
 ## Results
