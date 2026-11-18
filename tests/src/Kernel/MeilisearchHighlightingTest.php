@@ -7,6 +7,7 @@ namespace Drupal\Tests\meilisearch\Kernel;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\search_api\Entity\Index;
 use Drupal\Tests\search_api\Functional\ExampleContentTrait;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
@@ -48,16 +49,7 @@ class MeilisearchHighlightingTest extends KernelTestBase {
     $this->installConfig(['search_api', 'search_api_test_example_content', 'meilisearch_test']);
     $this->setUpExampleStructure();
 
-    $index = Index::load('meilisearch_test_index');
-    $processor = \Drupal::getContainer()->get('search_api.plugin_helper')
-      ->createProcessorPlugin($index, 'meilisearch_highlighting', [
-        'fields' => ['name', 'body'],
-        'pre_tag' => '<strong>',
-        'post_tag' => '</strong>',
-        'crop_length' => 6,
-        'crop_marker' => '…',
-      ]);
-    $index->addProcessor($processor)->save();
+    $this->configureHighlighting('…');
 
     $this->addTestEntity(1, [
       'name' => 'Wombat stew',
@@ -65,6 +57,25 @@ class MeilisearchHighlightingTest extends KernelTestBase {
       'body' => 'one two three <script>alert(1)</script> four five six seven eight nine ten eleven twelve wombat end',
     ]);
     $this->indexItems('meilisearch_test_index');
+  }
+
+  /**
+   * Adds the highlighting processor to the test index.
+   *
+   * @param string $crop_marker
+   *   The crop marker to configure.
+   */
+  protected function configureHighlighting(string $crop_marker): void {
+    $index = Index::load('meilisearch_test_index');
+    $processor = \Drupal::getContainer()->get('search_api.plugin_helper')
+      ->createProcessorPlugin($index, 'meilisearch_highlighting', [
+        'fields' => ['name', 'body'],
+        'pre_tag' => '<strong>',
+        'post_tag' => '</strong>',
+        'crop_length' => 6,
+        'crop_marker' => $crop_marker,
+      ]);
+    $index->addProcessor($processor)->save();
   }
 
   /**
@@ -86,12 +97,60 @@ class MeilisearchHighlightingTest extends KernelTestBase {
     $this->assertStringStartsWith('<strong>Wombat</strong> stew … ', $excerpt, 'Snippets of different fields are separated by the crop marker.');
     $this->assertStringContainsString('<strong>wombat</strong> end', $excerpt);
     $this->assertStringNotContainsString('… …', $excerpt);
-    $this->assertSame(['name', 'body'], array_keys($item->getExtraData('highlighted_fields')));
 
     $results = Index::load('meilisearch_test_index')->query()->keys('script')->execute();
     $excerpt = (string) current($results->getResultItems())->getExcerpt();
     $this->assertStringNotContainsString('<script>', $excerpt);
     $this->assertStringContainsString('&lt;script&gt;', $excerpt);
+  }
+
+  /**
+   * Only values Meilisearch did not crop are published as highlighted fields.
+   *
+   * Views can show highlighted_fields in place of the field values, so a
+   * cropped snippet would replace the whole value there. Cropped snippets
+   * still make the excerpt.
+   *
+   * @param string $crop_marker
+   *   The configured crop marker.
+   */
+  #[DataProvider('cropMarkerProvider')]
+  public function testHighlightedFieldsOnlyHoldUncroppedValues(string $crop_marker): void {
+    $this->configureHighlighting($crop_marker);
+    $this->addTestEntity(2, [
+      'name' => 'Short',
+      'type' => 'item',
+      'body' => '… a wombat …',
+    ]);
+    $this->indexItems('meilisearch_test_index');
+
+    $items = Index::load('meilisearch_test_index')->query()->keys('wombat')->execute()->getResultItems();
+    $ids = $this->getItemIds([1, 2]);
+
+    $long = $items[$ids[0]];
+    $this->assertSame(['name' => ['<strong>Wombat</strong> stew']], $long->getExtraData('highlighted_fields'), 'The cropped body is not published.');
+    $excerpt = (string) $long->getExcerpt();
+    $this->assertStringContainsString('<strong>wombat</strong> end', $excerpt, 'The cropped body still makes the excerpt.');
+    $this->assertDoesNotMatchRegularExpression('/[\x{E000}-\x{F8FF}]/u', $excerpt, 'No internal marker leaks into the excerpt.');
+    if ($crop_marker === '') {
+      $this->assertStringNotContainsString('…', $excerpt);
+    }
+    else {
+      $this->assertStringStartsWith('<strong>Wombat</strong> stew … ', $excerpt);
+    }
+
+    $short = $items[$ids[1]];
+    $this->assertSame(['body' => ['… a <strong>wombat</strong> …']], $short->getExtraData('highlighted_fields'), 'A whole value is published, even if it contains the crop marker.');
+  }
+
+  /**
+   * Provides crop markers.
+   */
+  public static function cropMarkerProvider(): array {
+    return [
+      'ellipsis' => ['…'],
+      'empty' => [''],
+    ];
   }
 
   /**

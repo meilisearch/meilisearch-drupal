@@ -19,8 +19,11 @@ use Drupal\search_api\Query\ResultSetInterface;
 /**
  * Builds result excerpts from Meilisearch's highlighting and cropping.
  *
- * The excerpt is available in Views as the "Excerpt" field, and the
- * highlighted values in the "highlighted_fields" extra data of each result.
+ * The excerpt is available in Views as the "Excerpt" field. The
+ * "highlighted_fields" extra data of each result holds the highlighted values
+ * that fit within the excerpt length uncropped: consumers such as Views' "Use
+ * highlighted field data" show them in place of the whole field value, so
+ * cropped snippets are only used for the excerpt.
  */
 #[SearchApiProcessor(
   id: 'meilisearch_highlighting',
@@ -118,14 +121,17 @@ class MeilisearchHighlighting extends ProcessorPluginBase implements PluginFormI
     // the configured tags after escaping. Indexed content can contain any
     // character, so the markers are random and differ for every search:
     // content cannot be mistaken for a match. They only use characters that
-    // escaping leaves alone.
+    // escaping leaves alone. Meilisearch does not report whether it cropped
+    // a value, but it adds the crop marker exactly when it does: a random
+    // crop marker, replaced by the configured one (which may be empty or
+    // occur in content) afterwards, tells cropped values apart.
     $nonce = bin2hex(random_bytes(8));
     $query->setOption('meilisearch_highlighting', [
       'fields' => $fields,
       'pre_tag' => "\u{E000}$nonce\u{E000}",
       'post_tag' => "\u{E001}$nonce\u{E001}",
       'crop_length' => (int) $this->configuration['crop_length'],
-      'crop_marker' => (string) $this->configuration['crop_marker'],
+      'crop_marker' => "\u{E002}$nonce\u{E002}",
     ]);
   }
 
@@ -138,26 +144,36 @@ class MeilisearchHighlighting extends ProcessorPluginBase implements PluginFormI
     $options = $results->getQuery()->getOption('meilisearch_highlighting');
     $pre_marker = is_array($options) ? (string) ($options['pre_tag'] ?? '') : '';
     $post_marker = is_array($options) ? (string) ($options['post_tag'] ?? '') : '';
-    if ($pre_marker === '' || $post_marker === '') {
+    $crop_marker = is_array($options) ? (string) ($options['crop_marker'] ?? '') : '';
+    if ($pre_marker === '' || $post_marker === '' || $crop_marker === '') {
       return;
     }
+    $configured_crop_marker = (string) $this->configuration['crop_marker'];
     $fields = $this->getHighlightedFields();
     foreach ($results->getResultItems() as $item) {
       $formatted = $item->getExtraData('meilisearch_formatted');
       if (!is_array($formatted)) {
         continue;
       }
+      $snippets = [];
       $highlighted = [];
       foreach ($fields as $field) {
         foreach ((array) ($formatted[$field] ?? []) as $value) {
           if (is_string($value) && str_contains($value, $pre_marker)) {
-            $highlighted[$field][] = $this->render($value, $pre_marker, $post_marker);
+            $cropped = str_contains($value, $crop_marker);
+            $rendered = $this->render(str_replace($crop_marker, $configured_crop_marker, $value), $pre_marker, $post_marker);
+            $snippets[] = $rendered;
+            if (!$cropped) {
+              $highlighted[$field][] = $rendered;
+            }
           }
         }
       }
       if ($highlighted) {
         $item->setExtraData('highlighted_fields', $highlighted);
-        $item->setExcerpt($this->joinSnippets(array_merge(...array_values($highlighted))));
+      }
+      if ($snippets) {
+        $item->setExcerpt($this->joinSnippets($snippets));
       }
     }
   }
