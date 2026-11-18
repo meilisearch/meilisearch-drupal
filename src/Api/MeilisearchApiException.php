@@ -8,7 +8,7 @@ namespace Drupal\meilisearch\Api;
  * Thrown for every Meilisearch failure.
  *
  * Covers API errors, network errors, timeouts and tasks that finished with
- * the "failed" status.
+ * the "failed" or "canceled" status.
  */
 class MeilisearchApiException extends \RuntimeException {
 
