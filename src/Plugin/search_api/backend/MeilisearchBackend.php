@@ -342,8 +342,10 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     $key = (string) $form_state->getValue('api_key');
     // A stored key belongs to the host it was entered for: never send it to
     // another one. A key set in settings.php cannot be entered here, so the
-    // documentation asks to override the URL along with it.
-    if ($key === '' && !isset($overridden['api_key']) && $this->configuration['api_key'] !== '' && $this->getOrigin($url) !== $this->getOrigin((string) $this->configuration['url'])) {
+    // documentation asks to override the URL along with it. A URL set in
+    // settings.php is the one the key is used with, whatever is stored.
+    $previous_url = (string) ($overridden['url'] ?? $this->configuration['url']);
+    if ($key === '' && !isset($overridden['api_key']) && $this->configuration['api_key'] !== '' && $this->getOrigin($url) !== $this->getOrigin($previous_url)) {
       $form_state->setErrorByName('api_key', $this->t('The URL points at another host: enter the API key again.'));
       return;
     }

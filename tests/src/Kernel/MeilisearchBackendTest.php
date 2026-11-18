@@ -276,6 +276,37 @@ class MeilisearchBackendTest extends KernelTestBase {
   }
 
   /**
+   * A URL set in settings.php cannot be changed in the form: keep the key.
+   *
+   * The server form loads the server without overrides, so the stored URL
+   * differs from the one in settings.php that the form submits.
+   */
+  public function testOverriddenUrlKeepsTheStoredKey(): void {
+    // Let the form manage the key, but keep the URL in settings.php.
+    unset($GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['api_key']);
+    \Drupal::configFactory()->getEditable('search_api.server.meilisearch_test_server')
+      ->set('backend_config.url', 'http://stored.example:7700')
+      ->set('backend_config.api_key', (string) getenv('MEILISEARCH_TEST_KEY'))
+      ->save();
+    $requests = $this->interceptRequestsTo(['stored.example']);
+    \Drupal::configFactory()->reset();
+    $storage = \Drupal::entityTypeManager()->getStorage('search_api_server');
+    $storage->resetCache();
+    $server = $storage->loadOverrideFree('meilisearch_test_server');
+    $this->assertInstanceOf(Server::class, $server);
+    $backend = $server->getBackend();
+    $this->assertSame('http://stored.example:7700', $backend->getConfiguration()['url'], 'The form sees the stored URL.');
+
+    $form_state = new FormState();
+    $form = $backend->buildConfigurationForm([], $form_state);
+    $form_state->setValues(['api_key' => ''] + $backend->getConfiguration());
+    $backend->validateConfigurationForm($form, $form_state);
+    $this->assertSame([], $form_state->getErrors(), 'The overridden URL keeps the stored key.');
+    $this->assertSame(getenv('MEILISEARCH_TEST_URL'), $form_state->getValue('url'));
+    $this->assertSame([], $requests->getArrayCopy(), 'Nothing is sent to the stored URL.');
+  }
+
+  /**
    * Answers the requests sent to some hosts and records them.
    *
    * Applies to the servers loaded afterwards.
