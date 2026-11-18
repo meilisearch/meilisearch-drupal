@@ -9,6 +9,7 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Flood\FloodInterface;
 use Drupal\meilisearch_analytics\AnalyticsEvents;
 use Drupal\search_api\IndexInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -37,6 +38,7 @@ class ClickController implements ContainerInjectionInterface {
     protected AnalyticsEvents $events,
     protected EntityTypeManagerInterface $entityTypeManager,
     protected FloodInterface $flood,
+    protected LoggerInterface $logger,
   ) {}
 
   /**
@@ -47,14 +49,18 @@ class ClickController implements ContainerInjectionInterface {
       $container->get('meilisearch_analytics.events'),
       $container->get('entity_type.manager'),
       $container->get('flood'),
+      $container->get('logger.channel.meilisearch'),
     );
   }
 
   /**
    * Records a click.
    *
-   * Responds 202 when the event was sent, 204 when there was nothing to send
-   * (self-hosted Meilisearch), 400, 403, 404 or 429 otherwise.
+   * Responds 204 to every well-formed click, whether the index exists, is
+   * enabled, is on Meilisearch Cloud or the event was sent, so the response
+   * does not tell anonymous clients which indexes exist. Clicks on unknown
+   * indexes are dropped silently; others are logged at debug level, saying
+   * whether they were relayed. Responds 400, 403 or 429 otherwise.
    */
   public function click(Request $request): Response {
     $site = $request->headers->get('Sec-Fetch-Site');
@@ -76,12 +82,20 @@ class ClickController implements ContainerInjectionInterface {
     }
 
     $index = $this->entityTypeManager->getStorage('search_api_index')->load($data['index']);
-    if (!$index instanceof IndexInterface) {
-      return new Response('', Response::HTTP_NOT_FOUND);
+    // Unknown indexes are not logged: anyone can send any index ID.
+    if ($index instanceof IndexInterface) {
+      $context = ['@index' => $index->id()];
+      if (!$index->status()) {
+        $this->logger->debug('Meilisearch analytics click on index @index dropped: the index is disabled.', $context);
+      }
+      elseif ($this->events->click($index, $data['queryUid'], $data['objectId'], $data['position'])) {
+        $this->logger->debug('Meilisearch analytics click on index @index relayed.', $context);
+      }
+      else {
+        $this->logger->debug('Meilisearch analytics click on index @index dropped: the index is not on Meilisearch Cloud or the event failed.', $context);
+      }
     }
-
-    $sent = $this->events->click($index, $data['queryUid'], $data['objectId'], $data['position']);
-    return new Response('', $sent ? Response::HTTP_ACCEPTED : Response::HTTP_NO_CONTENT);
+    return new Response('', Response::HTTP_NO_CONTENT);
   }
 
 }

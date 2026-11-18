@@ -13,6 +13,7 @@ drush en meilisearch_analytics -y
 - Searches ask Meilisearch for their query UID and send a pseudonymous visitor ID: a keyed hash of the user ID for authenticated users, a random first-party cookie (`meilisearch_uid`) for anonymous visitors.
 - Rows of views on Meilisearch indexes, in the *Unformatted list* and *HTML list* styles, get `data-meilisearch-*` attributes, and a small script reports clicks on links inside them.
 - Clicks go to `/meilisearch/analytics/click` on your site, never to Meilisearch directly, so no key reaches the browser. The endpoint validates its input, refuses cross-site requests and accepts 60 clicks per minute per client.
+- The endpoint answers every well-formed click with `204 No Content`, whether or not the index exists, is enabled or is on Meilisearch Cloud, so it does not tell visitors which indexes your site has. Clicks on disabled indexes are not sent. To check that clicks reach Meilisearch, look for the debug-level entries in the `meilisearch` log channel: each click on an existing index is logged as relayed or dropped, with the reason. Clicks on unknown indexes are not logged.
 
 Pages showing tracked results are not cached, and Search API does not cache the results of Meilisearch Cloud servers while the submodule is on, since each search has its own query UID. Searches on other servers keep their caching and get no header, attribute, script or cookie.
 
