@@ -141,14 +141,20 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   }
 
   /**
-   * Skips the test when the instance does not return search metadata.
+   * Skips the test when the Meilisearch version has no search metadata.
    *
-   * Older Meilisearch versions ignore the Meili-Include-Metadata header.
+   * Meilisearch answers the Meili-Include-Metadata header with the query UID
+   * from v1.24.0; older versions ignore it. The decision comes from the
+   * server version, not from the search response, so a version that should
+   * return the UID but does not makes the test fail.
    */
   protected function requireSearchMetadata(): void {
-    $results = Index::load('meilisearch_test_index')->query()->keys('foo')->execute();
-    if ($results->getExtraData('meilisearch_query_uid') === NULL) {
-      $this->markTestSkipped('This Meilisearch version does not return search metadata.');
+    $version = (string) $this->meilisearchClient()->version()['pkgVersion'];
+    // Drop pre-release and build suffixes, e.g. "1.24.0-rc.1".
+    preg_match('/^\d+\.\d+\.\d+/', $version, $match);
+    $this->assertNotEmpty($match, "Unexpected Meilisearch version \"$version\".");
+    if (version_compare($match[0], '1.24.0', '<')) {
+      $this->markTestSkipped("Meilisearch $version does not return search metadata.");
     }
   }
 
