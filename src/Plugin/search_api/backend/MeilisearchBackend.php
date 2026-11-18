@@ -129,8 +129,14 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   /**
    * {@inheritdoc}
    *
-   * A new URL, key or prefix points at other Meilisearch indexes: set them up
-   * and re-index. A new result limit only needs the settings pushed again.
+   * A new URL or prefix points at other Meilisearch indexes: set them up and
+   * re-index. A new key reaches the same indexes and a new result limit only
+   * changes a setting: both make sure the indexes are set up, which the
+   * previous key may not have been allowed to do, and push the settings again.
+   *
+   * The calls go through the server entity, which keeps a failure from
+   * breaking the save: it logs the error and stores a task to try again later.
+   * The re-index is queued even when Meilisearch cannot be reached yet.
    */
   public function postUpdate(): bool {
     $server = $this->getServer();
@@ -142,17 +148,15 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     $old = $original->getBackendConfig();
     $changed = fn(string $key) => ($old[$key] ?? NULL) !== ($this->configuration[$key] ?? NULL);
 
-    if ($changed('url') || $changed('api_key') || $changed('index_prefix')) {
+    if ($changed('url') || $changed('index_prefix')) {
       foreach ($server->getIndexes() as $index) {
-        $this->addIndex($index);
+        $server->addIndex($index);
       }
       return TRUE;
     }
-    if ($changed('max_total_hits')) {
+    if ($changed('api_key') || $changed('max_total_hits')) {
       foreach ($server->getIndexes() as $index) {
-        if (!$index->isReadOnly()) {
-          $this->pushSettings($index);
-        }
+        $server->updateIndex($index);
       }
     }
     return FALSE;
@@ -218,7 +222,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     $form['api_key'] = [
       '#type' => 'password',
       '#title' => $this->t('API key'),
-      '#description' => $this->t('An API key with the <em>search</em>, <em>documents.*</em>, <em>indexes.*</em>, <em>settings.*</em>, <em>tasks.get</em> and <em>version</em> actions. Avoid the master key. @state To keep the key out of exported configuration, set it in settings.php: <code>@snippet</code>', [
+      '#description' => $this->t('An API key with the <em>search</em>, <em>documents.*</em>, <em>indexes.*</em>, <em>settings.*</em>, <em>tasks.get</em>, <em>stats.get</em> and <em>version</em> actions. Avoid the master key. @state To keep the key out of exported configuration, set it in settings.php: <code>@snippet</code>', [
         '@state' => $this->configuration['api_key'] !== '' ? $this->t('A key is stored; leave empty to keep it.') : '',
         '@snippet' => "\$config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');",
       ]),
@@ -496,7 +500,11 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     if ($index->isReadOnly()) {
       return;
     }
-    $this->pushSettings($index);
+    // A settings update alone would make Meilisearch create a missing index
+    // with its default ranking rules. Setting it up sends the settings too.
+    if (!$this->ensureIndex($index)) {
+      $this->pushSettings($index);
+    }
     // Drupal 11.2 added getOriginal(); earlier versions use the property.
     // @phpstan-ignore function.alreadyNarrowedType
     $original = method_exists($index, 'getOriginal') ? $index->getOriginal() : ($index->original ?? NULL);
@@ -737,16 +745,20 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     $index = $query->getIndex();
     $location = $this->getLocationOption($query);
     $sorts = [];
-    $query_sorts = $query->getSorts();
-    // "Relevance, then X" with keys means relevance order: sorts are strict
-    // in the indexes this module creates, so X must not be sent.
-    if (array_key_first($query_sorts) === 'search_api_relevance' && $query->getKeys()) {
-      return [];
-    }
-    foreach ($query_sorts as $field => $direction) {
+    foreach ($query->getSorts() as $field => $direction) {
       $direction = strtolower((string) $direction) === 'desc' ? 'desc' : 'asc';
-      if ($field === 'search_api_relevance' || $field === 'search_api_random') {
-        // Relevance is Meilisearch's default order; random is not supported.
+      if ($field === 'search_api_relevance') {
+        // Relevance is the order Meilisearch applies after the sorts. Sorts
+        // are strict in the indexes this module creates, so with keys the
+        // ones after relevance would outrank it and must not be sent. Without
+        // keys relevance orders nothing and is skipped.
+        if ($query->getKeys()) {
+          break;
+        }
+        continue;
+      }
+      if ($field === 'search_api_random') {
+        // Random order is not supported.
         continue;
       }
       if ($index->getField($field)?->getType() === 'location') {
@@ -836,16 +848,20 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   /**
    * Sets up the Meilisearch index if it does not exist.
    *
-   * Meilisearch would otherwise create it on the first documents, without
-   * filterable or sortable attributes. That happens when an environment
-   * points at a fresh instance through a settings.php override.
+   * Meilisearch would otherwise create it on the first documents or settings
+   * update, without filterable or sortable attributes or with its default
+   * ranking rules. That happens when an environment points at a fresh instance
+   * through a settings.php override.
+   *
+   * @return bool
+   *   TRUE if the index was missing and has been set up, settings included.
    *
    * @throws \Drupal\search_api\SearchApiException
    */
-  protected function ensureIndex(IndexInterface $index): void {
+  protected function ensureIndex(IndexInterface $index): bool {
     $uid = $this->getIndexUid($index);
     if (isset($this->existingIndexes[$uid])) {
-      return;
+      return FALSE;
     }
     try {
       $exists = $this->getApi()->indexExists($uid);
@@ -857,6 +873,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       $this->addIndex($index);
     }
     $this->existingIndexes[$uid] = TRUE;
+    return !$exists;
   }
 
   /**

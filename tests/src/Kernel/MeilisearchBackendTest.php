@@ -9,8 +9,10 @@ use Drupal\Core\Form\FormState;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\search_api\Entity\Index;
 use Drupal\search_api\Entity\Server;
+use Drupal\search_api\Query\QueryInterface;
 use Drupal\search_api\SearchApiException;
 use Drupal\Tests\search_api\Functional\ExampleContentTrait;
+use Meilisearch\Contracts\TasksQuery;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
@@ -155,6 +157,46 @@ class MeilisearchBackendTest extends KernelTestBase {
   }
 
   /**
+   * With keywords, sorts placed after relevance must not outrank it.
+   *
+   * Sorts are strict in the indexes this module creates, so a sort sent after
+   * the position of relevance would order the results before relevance does.
+   */
+  public function testSortsAfterRelevanceAreNotSentWithKeywords(): void {
+    $sorts = function (?string $keys, array $fields): array {
+      $query = Index::load($this->indexId)->query();
+      if ($keys !== NULL) {
+        $query->keys($keys);
+      }
+      foreach ($fields as $field => $direction) {
+        $query->sort($field, $direction);
+      }
+      $build = new \ReflectionMethod($this->meilisearchBackend(), 'buildSorts');
+      return $build->invoke($this->meilisearchBackend(), $query);
+    };
+
+    $this->assertSame(['id:desc'], $sorts('foo', [
+      'id' => QueryInterface::SORT_DESC,
+      'search_api_relevance' => QueryInterface::SORT_DESC,
+      'created' => QueryInterface::SORT_ASC,
+    ]), 'Sorts after relevance are dropped.');
+    $this->assertSame([], $sorts('foo', [
+      'search_api_relevance' => QueryInterface::SORT_DESC,
+      'created' => QueryInterface::SORT_ASC,
+    ]), 'Relevance first means relevance order.');
+    $this->assertSame(['id:desc', 'created:asc'], $sorts(NULL, [
+      'id' => QueryInterface::SORT_DESC,
+      'search_api_relevance' => QueryInterface::SORT_DESC,
+      'created' => QueryInterface::SORT_ASC,
+    ]), 'Without keywords relevance orders nothing and is skipped.');
+    $this->assertSame(['id:desc', 'created:asc'], $sorts('foo', [
+      'id' => QueryInterface::SORT_DESC,
+      'search_api_random' => QueryInterface::SORT_ASC,
+      'created' => QueryInterface::SORT_ASC,
+    ]), 'An unsupported random sort is skipped.');
+  }
+
+  /**
    * Submitting the server form with an empty key keeps the stored key.
    */
   public function testEmptyApiKeyKeepsStoredKey(): void {
@@ -234,6 +276,54 @@ class MeilisearchBackendTest extends KernelTestBase {
   }
 
   /**
+   * A key with the actions the server form asks for is enough for everything.
+   */
+  public function testDocumentedKeyActionsAreSufficient(): void {
+    $server_config = &$GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config'];
+    $reset = function (): void {
+      \Drupal::configFactory()->reset();
+      \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+      \Drupal::entityTypeManager()->getStorage('search_api_index')->resetCache();
+    };
+    // The form only describes the key when settings.php does not set it.
+    $master_key = $server_config['api_key'];
+    unset($server_config['api_key']);
+    $reset();
+    $form = $this->meilisearchBackend()->buildConfigurationForm([], new FormState());
+    preg_match_all('~<em>([^<]+)</em>~', (string) $form['api_key']['#description'], $matches);
+    $actions = $matches[1];
+    $this->assertContains('search', $actions);
+
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    // Start without the index, so the key also has to create it.
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    // Not scoped to the test prefix: recent Meilisearch versions refuse an
+    // index-scoped key with the global "version" action.
+    $key = $client->createKey(['actions' => $actions, 'indexes' => ['*'], 'expiresAt' => NULL]);
+
+    try {
+      $server_config['api_key'] = (string) $key->getKey();
+      $reset();
+
+      $count = $this->indexItems($this->indexId);
+      $this->assertGreaterThan(0, $count);
+      $this->assertGreaterThan(0, Index::load($this->indexId)->query()->keys('foo')->execute()->getResultCount());
+
+      $info = $this->viewSettingsByLabel();
+      $this->assertSame('Connected', (string) $info['Connection']['info']);
+      $row = $info['Index <em class="placeholder">Test index</em>'];
+      $this->assertSame("$uid: $count documents", (string) $row['info']);
+      $this->assertArrayNotHasKey('status', $row, 'The index row is not a warning.');
+    }
+    finally {
+      $client->deleteKey((string) $key->getUid());
+      $server_config['api_key'] = $master_key;
+    }
+  }
+
+  /**
    * Results expose how long Meilisearch took.
    */
   public function testResultsExposeProcessingTime(): void {
@@ -262,6 +352,82 @@ class MeilisearchBackendTest extends KernelTestBase {
   }
 
   /**
+   * Saving a new URL that is not reachable yet still queues the re-index.
+   */
+  public function testSavingAnUnreachableUrlQueuesReindexing(): void {
+    $this->indexItems($this->indexId);
+    $tracker = Index::load($this->indexId)->getTrackerInstance();
+    $this->assertSame(0, $tracker->getRemainingItemsCount());
+    // Let the form change the URL: drop its override and cached copies.
+    unset($GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['url']);
+    \Drupal::configFactory()->reset();
+    \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+    $server = Server::load('meilisearch_test_server');
+    $server->setBackendConfig(['url' => 'http://127.0.0.1:1'] + $server->getBackendConfig());
+    $server->save();
+
+    $tracker = Index::load($this->indexId)->getTrackerInstance();
+    $this->assertSame($tracker->getTotalItemsCount(), $tracker->getRemainingItemsCount(), 'Items are queued for re-indexing.');
+    $this->assertSame(1, $this->countServerTasks('addIndex'), 'Setting up the index is retried later.');
+  }
+
+  /**
+   * Saving a new result limit while Meilisearch is down retries it later.
+   */
+  public function testSavingTheResultLimitWhileUnreachableIsRetried(): void {
+    // The instance went away; the stored connection settings do not change.
+    $GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['url'] = 'http://127.0.0.1:1';
+    \Drupal::configFactory()->reset();
+    \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+    $server = Server::load('meilisearch_test_server');
+    $server->setBackendConfig(['max_total_hits' => 500] + $server->getBackendConfig());
+    $server->save();
+
+    $this->assertSame(1, $this->countServerTasks('updateIndex'), 'Pushing the settings is retried later.');
+  }
+
+  /**
+   * A new API key reaches the same indexes: nothing has to be re-indexed.
+   */
+  public function testRotatingTheApiKeyDoesNotReindex(): void {
+    $this->indexItems($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid(Index::load($this->indexId));
+    $settings_updates = $this->countSettingsUpdates($uid);
+    $client = $this->meilisearchClient();
+    $key = $client->createKey(['actions' => ['*'], 'indexes' => ['*'], 'expiresAt' => NULL]);
+
+    try {
+      // Let the form change the key: drop its override and cached copies.
+      unset($GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['api_key']);
+      \Drupal::configFactory()->reset();
+      \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+      $server = Server::load('meilisearch_test_server');
+      $server->setBackendConfig(['api_key' => (string) $key->getKey()] + $server->getBackendConfig());
+      $server->save();
+
+      $tracker = Index::load($this->indexId)->getTrackerInstance();
+      $this->assertGreaterThan(0, $tracker->getIndexedItemsCount());
+      $this->assertSame(0, $tracker->getRemainingItemsCount(), 'Items are not queued for re-indexing.');
+      $this->assertSame($settings_updates + 1, $this->countSettingsUpdates($uid), 'The settings are sent with the new key.');
+      $this->assertSame(0, $this->countServerTasks('updateIndex'), 'Nothing failed with the new key.');
+    }
+    finally {
+      $client->deleteKey((string) $key->getUid());
+    }
+  }
+
+  /**
+   * Returns how many Search API tasks of a type wait for the test server.
+   */
+  protected function countServerTasks(string $type): int {
+    return (int) \Drupal::service('search_api.task_manager')->getTasksCount([
+      'type' => $type,
+      'server_id' => 'meilisearch_test_server',
+      'index_id' => $this->indexId,
+    ]);
+  }
+
+  /**
    * Indexing recreates a Meilisearch index deleted behind Drupal's back.
    *
    * This happens when an environment's URL is overridden in settings.php and
@@ -277,6 +443,53 @@ class MeilisearchBackendTest extends KernelTestBase {
     $settings = $client->index($uid)->getSettings();
     $this->assertContains('search_api_language', $settings['filterableAttributes']);
     $this->assertSame(2, Index::load($this->indexId)->query()->addCondition('type', 'article')->execute()->getResultCount(), 'Filters work on the recreated index.');
+  }
+
+  /**
+   * Saving an index sets up a missing Meilisearch index like indexing does.
+   *
+   * A settings update alone makes Meilisearch create the index with its
+   * default ranking rules, where "sort" comes after the relevancy rules.
+   */
+  public function testSavingAnIndexSetsUpMissingIndexes(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    $settings_updates = $this->countSettingsUpdates($uid);
+
+    $index->set('description', 'Saved before anything was indexed.');
+    $index->save();
+
+    $settings = $client->index($uid)->getSettings();
+    $this->assertSame('sort', $settings['rankingRules'][0], 'Explicit sorts are strict on the recreated index.');
+    $this->assertContains('search_api_language', $settings['filterableAttributes']);
+    $this->assertSame($settings_updates + 1, $this->countSettingsUpdates($uid), 'The settings are sent once.');
+  }
+
+  /**
+   * A new result limit sets up a missing Meilisearch index before pushing it.
+   */
+  public function testChangingTheResultLimitSetsUpMissingIndexes(): void {
+    $uid = $this->meilisearchBackend()->getIndexUid(Index::load($this->indexId));
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+
+    $server = Server::load('meilisearch_test_server');
+    $server->setBackendConfig(['max_total_hits' => 500] + $server->getBackendConfig());
+    $server->save();
+
+    $settings = $client->index($uid)->getSettings();
+    $this->assertSame('sort', $settings['rankingRules'][0], 'Explicit sorts are strict on the recreated index.');
+    $this->assertSame(500, $settings['pagination']['maxTotalHits']);
+  }
+
+  /**
+   * Returns how many settings updates Meilisearch received for an index.
+   */
+  protected function countSettingsUpdates(string $uid): int {
+    $query = (new TasksQuery())->setIndexUids([$uid])->setTypes(['settingsUpdate'])->setLimit(1);
+    return $this->meilisearchClient()->getTasks($query)->getTotal();
   }
 
   /**
