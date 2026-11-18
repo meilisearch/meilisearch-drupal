@@ -36,14 +36,6 @@ class MeilisearchHighlighting extends ProcessorPluginBase implements PluginFormI
   use PluginFormTrait;
 
   /**
-   * Markers Meilisearch puts around matches, replaced after escaping.
-   *
-   * Private-use characters, so they cannot come from indexed content.
-   */
-  protected const PRE_MARKER = "\u{E000}";
-  protected const POST_MARKER = "\u{E001}";
-
-  /**
    * {@inheritdoc}
    */
   public static function supportsIndex(IndexInterface $index): bool {
@@ -122,10 +114,16 @@ class MeilisearchHighlighting extends ProcessorPluginBase implements PluginFormI
     if (!$fields) {
       return;
     }
+    // Meilisearch puts these markers around matches; they are replaced by
+    // the configured tags after escaping. Indexed content can contain any
+    // character, so the markers are random and differ for every search:
+    // content cannot be mistaken for a match. They only use characters that
+    // escaping leaves alone.
+    $nonce = bin2hex(random_bytes(8));
     $query->setOption('meilisearch_highlighting', [
       'fields' => $fields,
-      'pre_tag' => self::PRE_MARKER,
-      'post_tag' => self::POST_MARKER,
+      'pre_tag' => "\u{E000}$nonce\u{E000}",
+      'post_tag' => "\u{E001}$nonce\u{E001}",
       'crop_length' => (int) $this->configuration['crop_length'],
       'crop_marker' => (string) $this->configuration['crop_marker'],
     ]);
@@ -135,6 +133,14 @@ class MeilisearchHighlighting extends ProcessorPluginBase implements PluginFormI
    * {@inheritdoc}
    */
   public function postprocessSearchResults(ResultSetInterface $results): void {
+    // Without the markers of this search (the query was not preprocessed by
+    // this processor), matches cannot be told apart from content.
+    $options = $results->getQuery()->getOption('meilisearch_highlighting');
+    $pre_marker = is_array($options) ? (string) ($options['pre_tag'] ?? '') : '';
+    $post_marker = is_array($options) ? (string) ($options['post_tag'] ?? '') : '';
+    if ($pre_marker === '' || $post_marker === '') {
+      return;
+    }
     $fields = $this->getHighlightedFields();
     foreach ($results->getResultItems() as $item) {
       $formatted = $item->getExtraData('meilisearch_formatted');
@@ -144,8 +150,8 @@ class MeilisearchHighlighting extends ProcessorPluginBase implements PluginFormI
       $highlighted = [];
       foreach ($fields as $field) {
         foreach ((array) ($formatted[$field] ?? []) as $value) {
-          if (is_string($value) && str_contains($value, self::PRE_MARKER)) {
-            $highlighted[$field][] = $this->render($value);
+          if (is_string($value) && str_contains($value, $pre_marker)) {
+            $highlighted[$field][] = $this->render($value, $pre_marker, $post_marker);
           }
         }
       }
@@ -176,10 +182,17 @@ class MeilisearchHighlighting extends ProcessorPluginBase implements PluginFormI
 
   /**
    * Escapes a formatted value, then turns the markers into the tags.
+   *
+   * @param string $value
+   *   The formatted value returned by Meilisearch.
+   * @param string $pre_marker
+   *   The marker Meilisearch put before each match.
+   * @param string $post_marker
+   *   The marker Meilisearch put after each match.
    */
-  protected function render(string $value): string {
+  protected function render(string $value, string $pre_marker, string $post_marker): string {
     return str_replace(
-      [self::PRE_MARKER, self::POST_MARKER],
+      [$pre_marker, $post_marker],
       [Xss::filterAdmin($this->configuration['pre_tag']), Xss::filterAdmin($this->configuration['post_tag'])],
       Html::escape($value),
     );
