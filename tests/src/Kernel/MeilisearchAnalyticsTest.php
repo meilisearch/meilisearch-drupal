@@ -6,6 +6,8 @@ namespace Drupal\Tests\meilisearch\Kernel;
 
 use Drupal\Core\Cache\Cache;
 use Drupal\Core\Cache\CacheableDependencyInterface;
+use Drupal\Core\Logger\RfcLogLevel;
+use Drupal\Core\Logger\RfcLoggerTrait;
 use Drupal\Core\PageCache\ResponsePolicy\KillSwitch;
 use Drupal\Core\PageCache\ResponsePolicyInterface;
 use Drupal\Core\Session\UserSession;
@@ -16,6 +18,7 @@ use Drupal\search_api\Entity\Index;
 use Drupal\Tests\search_api\Functional\ExampleContentTrait;
 use Drupal\views\Views;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -72,6 +75,13 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   protected array $sentEvents = [];
 
   /**
+   * The messages logged on the meilisearch channel during the test.
+   *
+   * @var array<int, array{level: mixed, message: string}>
+   */
+  protected array $logs = [];
+
+  /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
@@ -89,6 +99,33 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
     // Messages shown while setting up have triggered the page cache kill
     // switch: give the code under test a new one.
     $this->container->set('page_cache_kill_switch', new KillSwitch());
+    $this->collectLogs();
+  }
+
+  /**
+   * Records what is logged on the meilisearch channel from now on.
+   */
+  protected function collectLogs(): void {
+    $logger = new class($this->logs) implements LoggerInterface {
+      use RfcLoggerTrait;
+
+      /**
+       * Constructs the logger.
+       */
+      public function __construct(protected array &$logs) {}
+
+      /**
+       * {@inheritdoc}
+       */
+      public function log($level, string|\Stringable $message, array $context = []): void {
+        if (($context['channel'] ?? NULL) === 'meilisearch') {
+          $placeholders = array_filter($context, fn($key) => str_starts_with((string) $key, '@'), ARRAY_FILTER_USE_KEY);
+          $this->logs[] = ['level' => $level, 'message' => strtr((string) $message, $placeholders)];
+        }
+      }
+
+    };
+    $this->container->get('logger.factory')->addLogger($logger);
   }
 
   /**
@@ -296,8 +333,19 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   public function testClickEndpointValidatesInput(): void {
     $this->assertSame(400, $this->postClick('not json')->getStatusCode());
     $this->assertSame(400, $this->postClick(['index' => 'meilisearch_test_index'])->getStatusCode());
-    $this->assertSame(404, $this->postClick($this->validClick(['index' => 'nope']))->getStatusCode());
     $this->assertSame(400, $this->postClick($this->validClick(['objectId' => 'a b']))->getStatusCode());
+  }
+
+  /**
+   * A click on an unknown index looks like any other, and is not logged.
+   *
+   * Otherwise the endpoint would tell anyone which indexes exist.
+   */
+  public function testClickOnUnknownIndexIsNotDisclosed(): void {
+    $this->useCloud();
+    $this->assertSame(204, $this->postClick($this->validClick(['index' => 'nope']))->getStatusCode());
+    $this->assertSame([], $this->sentEvents);
+    $this->assertSame([], $this->logs);
   }
 
   /**
@@ -306,14 +354,23 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   public function testClickOnSelfHostedIsAccepted(): void {
     $this->assertSame(204, $this->postClick($this->validClick())->getStatusCode());
     $this->assertSame([], $this->sentEvents);
+    $this->assertSame([
+      [
+        'level' => RfcLogLevel::DEBUG,
+        'message' => 'Meilisearch analytics click on index meilisearch_test_index dropped: the index is not on Meilisearch Cloud or the event failed.',
+      ],
+    ], $this->logs);
   }
 
   /**
    * Clicks on Meilisearch Cloud results are sent as events.
+   *
+   * The response is the same as when nothing is sent, so it does not tell
+   * which indexes are on Meilisearch Cloud.
    */
   public function testClickOnCloudIsSent(): void {
     $this->useCloud();
-    $this->assertSame(202, $this->postClick($this->validClick())->getStatusCode());
+    $this->assertSame(204, $this->postClick($this->validClick())->getStatusCode());
     $this->assertSame([
       [
         'eventType' => 'click',
@@ -325,6 +382,29 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
         'userId' => 'anonymous',
       ],
     ], $this->sentEvents);
+    $this->assertSame([
+      [
+        'level' => RfcLogLevel::DEBUG,
+        'message' => 'Meilisearch analytics click on index meilisearch_test_index relayed.',
+      ],
+    ], $this->logs);
+  }
+
+  /**
+   * Clicks on a disabled index are not relayed.
+   */
+  public function testClickOnDisabledIndexIsDropped(): void {
+    Index::load('meilisearch_test_index')->disable()->save();
+    $this->useCloud();
+    $this->logs = [];
+    $this->assertSame(204, $this->postClick($this->validClick())->getStatusCode());
+    $this->assertSame([], $this->sentEvents);
+    $this->assertSame([
+      [
+        'level' => RfcLogLevel::DEBUG,
+        'message' => 'Meilisearch analytics click on index meilisearch_test_index dropped: the index is disabled.',
+      ],
+    ], $this->logs);
   }
 
   /**
@@ -335,9 +415,23 @@ class MeilisearchAnalyticsTest extends KernelTestBase {
   }
 
   /**
-   * Clicks are rate limited per client.
+   * Clicks are rate limited per client IP.
    */
   public function testClicksAreRateLimited(): void {
+    for ($i = 0; $i < 60; $i++) {
+      $this->assertSame(204, $this->postClick($this->validClick())->getStatusCode());
+    }
+    $this->assertSame(429, $this->postClick($this->validClick())->getStatusCode());
+    $this->assertSame(429, $this->postClick('not json')->getStatusCode());
+  }
+
+  /**
+   * Malformed requests do not use up the rate limit of valid clicks.
+   */
+  public function testInvalidClicksAreNotCounted(): void {
+    for ($i = 0; $i < 61; $i++) {
+      $this->assertSame(400, $this->postClick('not json')->getStatusCode());
+    }
     for ($i = 0; $i < 60; $i++) {
       $this->assertSame(204, $this->postClick($this->validClick())->getStatusCode());
     }
