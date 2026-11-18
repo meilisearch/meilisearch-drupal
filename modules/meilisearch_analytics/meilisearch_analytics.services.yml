@@ -1,4 +1,8 @@
 services:
+  meilisearch_analytics.cloud_servers:
+    class: Drupal\meilisearch_analytics\CloudServers
+    arguments: ['@meilisearch.api_factory']
+
   meilisearch_analytics.user_id:
     class: Drupal\meilisearch_analytics\UserIdResolver
     arguments: ['@current_user', '@request_stack', '@settings']
@@ -9,9 +13,10 @@ services:
 
   meilisearch_analytics.row_attributes:
     class: Drupal\meilisearch_analytics\RowAttributes
-    arguments: ['@page_cache_kill_switch']
+    arguments: ['@page_cache_kill_switch', '@meilisearch_analytics.cloud_servers']
 
   meilisearch_analytics.uncacheable_query_subscriber:
     class: Drupal\meilisearch_analytics\EventSubscriber\UncacheableQuerySubscriber
+    arguments: ['@meilisearch_analytics.cloud_servers']
     tags:
       - { name: event_subscriber }

@@ -2,7 +2,7 @@
 title: Click analytics
 ---
 
-The **Meilisearch Analytics** submodule sends clicks on search results to [Meilisearch Cloud analytics](https://www.meilisearch.com/docs/capabilities/analytics/overview), which then reports click-through rate and average click position. Self-hosted Meilisearch has no analytics: the submodule does nothing there.
+The **Meilisearch Analytics** submodule sends clicks on search results to [Meilisearch Cloud analytics](https://www.meilisearch.com/docs/capabilities/analytics/overview), which then reports click-through rate and average click position. Self-hosted Meilisearch has no analytics: the submodule does nothing there. A server counts as Meilisearch Cloud when its URL is on `meilisearch.io`, so a Cloud project reached through a custom domain or a proxy is not tracked either.
 
 ```bash
 drush en meilisearch_analytics -y
@@ -14,7 +14,7 @@ drush en meilisearch_analytics -y
 - Rows of views on Meilisearch indexes, in the *Unformatted list* and *HTML list* styles, get `data-meilisearch-*` attributes, and a small script reports clicks on links inside them.
 - Clicks go to `/meilisearch/analytics/click` on your site, never to Meilisearch directly, so no key reaches the browser. The endpoint validates its input, refuses cross-site requests and accepts 60 clicks per minute per client.
 
-Pages showing tracked results are not cached, and Search API does not cache Meilisearch results while the submodule is on, since each search has its own query UID.
+Pages showing tracked results are not cached, and Search API does not cache the results of Meilisearch Cloud servers while the submodule is on, since each search has its own query UID. Searches on other servers keep their caching and get no header, attribute, script or cookie.
 
 ## Conversions
 
