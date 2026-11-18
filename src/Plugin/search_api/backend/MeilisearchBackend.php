@@ -223,7 +223,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       '#type' => 'password',
       '#title' => $this->t('API key'),
       '#description' => $this->t('An API key with the <em>search</em>, <em>documents.*</em>, <em>indexes.*</em>, <em>settings.*</em>, <em>tasks.get</em>, <em>stats.get</em> and <em>version</em> actions. Avoid the master key. @state To keep the key out of exported configuration, set it in settings.php: <code>@snippet</code>', [
-        '@state' => $this->configuration['api_key'] !== '' ? $this->t('A key is stored; leave empty to keep it.') : '',
+        '@state' => $this->configuration['api_key'] !== '' ? $this->t('A key is stored; leave empty to keep it. A URL with another host, scheme or port needs the key again.') : '',
         '@snippet' => "\$config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');",
       ]),
     ];
@@ -340,6 +340,13 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     }
 
     $key = (string) $form_state->getValue('api_key');
+    // A stored key belongs to the host it was entered for: never send it to
+    // another one. A key set in settings.php cannot be entered here, so the
+    // documentation asks to override the URL along with it.
+    if ($key === '' && !isset($overridden['api_key']) && $this->configuration['api_key'] !== '' && $this->getOrigin($url) !== $this->getOrigin((string) $this->configuration['url'])) {
+      $form_state->setErrorByName('api_key', $this->t('The URL points at another host: enter the API key again.'));
+      return;
+    }
     $api = $this->apiFactory->create($url, $key !== '' ? $key : (string) ($overridden['api_key'] ?? $this->configuration['api_key']));
     try {
       $api->version();
@@ -350,6 +357,23 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
         '@message' => $e->getMessage(),
       ]));
     }
+  }
+
+  /**
+   * Returns the origin of a URL: scheme, lowercased host and port.
+   *
+   * The port defaults to that of the scheme, so "http://example.com" and
+   * "http://EXAMPLE.com:80/path" have the same origin.
+   */
+  protected function getOrigin(string $url): string {
+    $parts = parse_url($url) ?: [];
+    $scheme = strtolower($parts['scheme'] ?? '');
+    $port = $parts['port'] ?? match ($scheme) {
+      'http' => 80,
+      'https' => 443,
+      default => 0,
+    };
+    return sprintf('%s://%s:%d', $scheme, strtolower($parts['host'] ?? ''), $port);
   }
 
   /**

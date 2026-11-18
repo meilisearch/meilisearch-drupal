@@ -5,7 +5,7 @@ title: Server configuration
 | Setting | Description |
 |---|---|
 | Meilisearch URL | Full URL including the port, for example `http://127.0.0.1:7700` or `https://ms-abc123.fra.meilisearch.io`. |
-| API key | See below. Leave empty when editing to keep the stored key. |
+| API key | See below. Leave empty when editing to keep the stored key. A new URL with another scheme, host or port needs the key again; a new path does not. |
 | Index prefix | Prepended to Meilisearch index names (`prod_`, `staging_`) so several sites or environments can share an instance. Changing it requires re-indexing. |
 | Search mode | Keyword, hybrid or semantic. See [Semantic search](/guides/semantic-search). |
 | Matching strategy | How many query words must match: `last` (Meilisearch default), `all` or `frequency`. |
@@ -17,13 +17,14 @@ Create a dedicated key with these actions: `search`, `documents.*`, `indexes.*`,
 
 `stats.get` is what lets the server page show the number of documents in each index. Without it, indexing and search work but the page shows *The provided API key is invalid* next to every index. The actions of a Meilisearch key cannot be edited after it is created, so a key that lacks one has to be replaced: create a new key with the full list, give it to Drupal, then delete the old one.
 
-To keep the key out of configuration exports, set it in `settings.php`:
+To keep the key out of configuration exports, set it in `settings.php`, and set the URL there too:
 
 ```php
+$config['search_api.server.SERVER_ID']['backend_config']['url'] = getenv('MEILISEARCH_URL');
 $config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');
 ```
 
-The same works for the URL, so each environment points at its own instance.
+This also lets each environment point at its own instance. Override both: with only the key in `settings.php`, the URL stays editable in the form and the module sends the key to whatever URL is saved there, as it cannot ask for a key it does not store. A key stored in configuration is protected instead: when the URL's scheme, host or port changes, the form asks for the key again rather than send the stored one to the new host.
 
 ## Changing the connection
 

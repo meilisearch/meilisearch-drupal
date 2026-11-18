@@ -6,14 +6,20 @@ namespace Drupal\Tests\meilisearch\Kernel;
 
 use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
 use Drupal\Core\Form\FormState;
+use Drupal\Core\Http\ClientFactory;
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\meilisearch\Api\MeilisearchApiFactory;
 use Drupal\search_api\Entity\Index;
 use Drupal\search_api\Entity\Server;
 use Drupal\search_api\Query\QueryInterface;
 use Drupal\search_api\SearchApiException;
 use Drupal\Tests\search_api\Functional\ExampleContentTrait;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Promise\Create;
+use GuzzleHttp\Psr7\Response;
 use Meilisearch\Contracts\TasksQuery;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
+use Psr\Http\Message\RequestInterface;
 
 /**
  * Tests Meilisearch-specific backend behavior against a real instance.
@@ -215,6 +221,86 @@ class MeilisearchBackendTest extends KernelTestBase {
     $form_state->setValues(['api_key' => ''] + $backend->getConfiguration());
     $backend->submitConfigurationForm($form, $form_state);
     $this->assertSame('stored-secret', $backend->getConfiguration()['api_key']);
+  }
+
+  /**
+   * A stored key is only kept for the host it was entered for.
+   *
+   * Otherwise anyone allowed to edit the server could send the key to a host
+   * of their choice by changing the URL and leaving the key field empty.
+   */
+  public function testChangingTheUrlHostRequiresTheStoredKeyAgain(): void {
+    // Let the form manage the URL and the key: drop their overrides.
+    $server_config = &$GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config'];
+    unset($server_config['url'], $server_config['api_key']);
+    $reset = function (): void {
+      \Drupal::configFactory()->reset();
+      \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+    };
+    $requests = $this->interceptRequestsTo(['search.example', 'other.example']);
+    $reset();
+
+    $validate = function (array $values): FormState {
+      $backend = $this->meilisearchBackend();
+      $backend->setConfiguration(['url' => 'http://search.example/meilisearch', 'api_key' => 'stored-secret'] + $backend->getConfiguration());
+      $form_state = new FormState();
+      $form = $backend->buildConfigurationForm([], $form_state);
+      $form_state->setValues($values + ['api_key' => ''] + $backend->getConfiguration());
+      $backend->validateConfigurationForm($form, $form_state);
+      return $form_state;
+    };
+
+    $form_state = $validate(['url' => 'https://other.example']);
+    $this->assertArrayHasKey('api_key', $form_state->getErrors(), 'A new host needs the key again.');
+    $this->assertSame([], $requests->getArrayCopy(), 'The stored key is not sent to the new host.');
+
+    foreach (['http://search.example', 'HTTP://Search.Example:80/meilisearch/'] as $url) {
+      $requests->exchangeArray([]);
+      $form_state = $validate(['url' => $url]);
+      $this->assertSame([], $form_state->getErrors(), "$url keeps the stored key.");
+      $this->assertSame(['http://search.example:80 Bearer stored-secret'], $requests->getArrayCopy());
+    }
+
+    $requests->exchangeArray([]);
+    $form_state = $validate(['url' => 'https://other.example', 'api_key' => 'new-secret']);
+    $this->assertSame([], $form_state->getErrors(), 'A key entered with the new URL is accepted.');
+    $this->assertSame(['https://other.example:443 Bearer new-secret'], $requests->getArrayCopy());
+
+    // A key set in settings.php cannot be entered in the form: the URL change
+    // is accepted, and the documentation asks to override both together.
+    $server_config['api_key'] = 'overridden-secret';
+    $reset();
+    $requests->exchangeArray([]);
+    $form_state = $validate(['url' => 'https://other.example']);
+    $this->assertSame([], $form_state->getErrors());
+  }
+
+  /**
+   * Answers the requests sent to some hosts and records them.
+   *
+   * Applies to the servers loaded afterwards.
+   *
+   * @param string[] $hosts
+   *   The hosts whose requests never leave the test.
+   *
+   * @return \ArrayObject<int, string>
+   *   Receives the origin and Authorization header of each intercepted request.
+   */
+  protected function interceptRequestsTo(array $hosts): \ArrayObject {
+    /** @var \ArrayObject<int, string> $requests */
+    $requests = new \ArrayObject();
+    $stack = HandlerStack::create();
+    $stack->push(fn(callable $handler) => function (RequestInterface $request, array $options) use ($handler, $hosts, $requests) {
+      $uri = $request->getUri();
+      if (!in_array($uri->getHost(), $hosts, TRUE)) {
+        return $handler($request, $options);
+      }
+      $port = $uri->getPort() ?? ($uri->getScheme() === 'https' ? 443 : 80);
+      $requests[] = sprintf('%s://%s:%d %s', $uri->getScheme(), $uri->getHost(), $port, $request->getHeaderLine('Authorization'));
+      return Create::promiseFor(new Response(200, ['Content-Type' => 'application/json'], '{"pkgVersion":"1.54.0"}'));
+    });
+    $this->container->set('meilisearch.api_factory', new MeilisearchApiFactory(new ClientFactory($stack)));
+    return $requests;
   }
 
   /**

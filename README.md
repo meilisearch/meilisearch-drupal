@@ -31,11 +31,14 @@ Using Meilisearch Cloud? See [`docs/guides/meilisearch-cloud.mdx`](docs/guides/m
 2. Add an index on that server, pick content and fields, then **Index now**.
 3. Build a view on the index with a fulltext filter.
 
-Keep the API key out of configuration exports by setting it in `settings.php`:
+Keep the API key out of configuration exports by setting it in `settings.php`, together with the URL so the form cannot send the key to another host:
 
 ```php
+$config['search_api.server.SERVER_ID']['backend_config']['url'] = getenv('MEILISEARCH_URL');
 $config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');
 ```
+
+A key stored in configuration is kept when the key field is left empty, except when the URL's scheme, host or port changes: the key must then be entered again.
 
 Use a dedicated key with the `search`, `documents.*`, `indexes.*`, `settings.*`, `stats.get`, `tasks.get` and `version` actions rather than the master key. The actions of a Meilisearch key cannot be edited afterwards: to add one, create a new key and replace the old one.
 
