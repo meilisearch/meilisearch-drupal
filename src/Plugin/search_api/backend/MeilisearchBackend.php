@@ -513,9 +513,13 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     }
     // Search API expects explicit sorts to be strict, while Meilisearch ranks
     // "sort" after the relevancy rules by default. Moving it first has no
-    // effect on searches without a sort. Only done for new indexes: ranking
-    // rules are then managed in Meilisearch (dashboard, API or CLI).
-    $this->pushSettings($index, $created ? ['rankingRules' => self::RANKING_RULES] : []);
+    // effect on searches without a sort. Only done for new indexes, and for
+    // existing ones that are empty and still have the server's default rules,
+    // as an earlier attempt that failed after creating the index leaves them:
+    // ranking rules are otherwise managed in Meilisearch (dashboard, API or
+    // CLI).
+    $sort_first = $created || $this->hasDefaultRankingRules($uid);
+    $this->pushSettings($index, $sort_first ? ['rankingRules' => self::RANKING_RULES] : []);
     $this->existingIndexes[$uid] = TRUE;
   }
 
@@ -900,6 +904,101 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     }
     $this->existingIndexes[$uid] = TRUE;
     return !$exists;
+  }
+
+  /**
+   * Returns TRUE if an index is empty and has the server's default rules.
+   *
+   * Returns FALSE, without further requests, for an index with documents or
+   * with the module's rules. If the check fails, a warning is logged and the
+   * rules are reported as customised, so they are left alone.
+   */
+  protected function hasDefaultRankingRules(string $uid): bool {
+    $api = $this->getApi();
+    try {
+      if ((int) ($api->indexStats($uid)['numberOfDocuments'] ?? 0) > 0) {
+        return FALSE;
+      }
+      $rules = $api->getSettings($uid)['rankingRules'] ?? NULL;
+      if (!is_array($rules) || $rules === self::RANKING_RULES) {
+        return FALSE;
+      }
+      return $rules === $this->readDefaultRankingRules($uid);
+    }
+    catch (MeilisearchApiException $e) {
+      // A key limited to exact index names cannot create the scratch index.
+      $this->logger->warning('Could not compare the ranking rules of Meilisearch index @uid with the defaults of the server, so they were left unchanged: @message', [
+        '@uid' => $uid,
+        '@message' => $e->getMessage(),
+      ]);
+      return FALSE;
+    }
+  }
+
+  /**
+   * Returns the default ranking rules of the Meilisearch server.
+   *
+   * They differ between Meilisearch versions and no route returns them, so
+   * they are read from a new, empty scratch index, deleted afterwards. Its UID
+   * starts with the index's, so a key limited to the index prefix may create
+   * it.
+   *
+   * @param string $uid
+   *   The UID of the index the defaults are compared with.
+   *
+   * @return string[]
+   *   The ranking rules.
+   *
+   * @throws \Drupal\meilisearch\Api\MeilisearchApiException
+   */
+  protected function readDefaultRankingRules(string $uid): array {
+    $api = $this->getApi();
+    $scratch = $uid . '__defaults_' . bin2hex(random_bytes(4));
+    $may_exist = FALSE;
+    try {
+      try {
+        $task = $api->createIndex($scratch, DocumentConverterInterface::PRIMARY_KEY);
+      }
+      catch (MeilisearchApiException $e) {
+        // Without an answer from Meilisearch, the creation may have been
+        // enqueued all the same.
+        $may_exist = $e->getErrorCode() === NULL;
+        throw $e;
+      }
+      $may_exist = TRUE;
+      $api->waitForTask((int) $task['taskUid']);
+      $rules = $api->getSettings($scratch)['rankingRules'] ?? NULL;
+      if (!is_array($rules)) {
+        throw new MeilisearchApiException(sprintf('The settings of Meilisearch index %s have no ranking rules.', $scratch));
+      }
+      return $rules;
+    }
+    finally {
+      if ($may_exist) {
+        $this->deleteScratchIndex($scratch);
+      }
+    }
+  }
+
+  /**
+   * Deletes a scratch index and waits for it to be gone.
+   *
+   * Tasks on an index run in order, so the deletion also removes an index
+   * whose creation is still enqueued. Failures are logged, not thrown.
+   */
+  protected function deleteScratchIndex(string $scratch): void {
+    $api = $this->getApi();
+    try {
+      $api->waitForTask((int) $api->deleteIndex($scratch)['taskUid']);
+    }
+    catch (MeilisearchApiException $e) {
+      if ($e->getErrorCode() !== 'index_not_found') {
+        $this->logger->error('Could not delete the scratch Meilisearch index @scratch; delete it by hand: @message', [
+          '@scratch' => $scratch,
+          '@message' => $e->getMessage(),
+        ]);
+      }
+    }
   }
 
   /**

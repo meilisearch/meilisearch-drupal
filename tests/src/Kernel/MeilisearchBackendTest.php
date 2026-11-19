@@ -7,6 +7,7 @@ namespace Drupal\Tests\meilisearch\Kernel;
 use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
 use Drupal\Core\Form\FormState;
 use Drupal\Core\Http\ClientFactory;
+use Drupal\Core\Logger\RfcLogLevel;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\meilisearch\Api\MeilisearchApiFactory;
 use Drupal\meilisearch\Plugin\search_api\backend\MeilisearchBackend;
@@ -21,6 +22,8 @@ use GuzzleHttp\Psr7\Response;
 use Meilisearch\Contracts\TasksQuery;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Psr\Http\Message\RequestInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\LoggerTrait;
 
 /**
  * Tests Meilisearch-specific backend behavior against a real instance.
@@ -601,6 +604,287 @@ class MeilisearchBackendTest extends KernelTestBase {
     $settings = $client->index($uid)->getSettings();
     $this->assertSame('sort', $settings['rankingRules'][0], 'Explicit sorts are strict on the recreated index.');
     $this->assertSame(500, $settings['pagination']['maxTotalHits']);
+  }
+
+  /**
+   * Setting up an index that a failed attempt left bare puts "sort" first.
+   *
+   * Creating the index can succeed and sending its settings fail; the retry
+   * then finds the index already there, with the server's default rules.
+   */
+  public function testSettingUpAnEmptyIndexWithDefaultRulesPutsSortFirst(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    $client->waitForTask($client->createIndex($uid, ['primaryKey' => 'search_api_id'])['taskUid']);
+
+    $this->meilisearchBackend()->addIndex($index);
+    $settings = $client->index($uid)->getSettings();
+    $this->assertSame('sort', $settings['rankingRules'][0], 'Explicit sorts are strict on the bare index.');
+    $this->assertContains('search_api_language', $settings['filterableAttributes']);
+    $this->assertSame([], array_diff($this->testIndexUids(), [$uid]), 'No other index is left behind.');
+  }
+
+  /**
+   * An existing index keeps ranking rules customised in Meilisearch.
+   */
+  public function testSettingUpAnIndexKeepsCustomRankingRules(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $custom = ['words', 'sort', 'typo', 'proximity', 'exactness'];
+    $client->waitForTask($client->index($uid)->updateRankingRules($custom)['taskUid']);
+
+    $this->meilisearchBackend()->addIndex($index);
+    $this->assertSame($custom, $client->index($uid)->getRankingRules());
+    $this->assertSame([$uid], $this->testIndexUids(), 'The scratch index is deleted.');
+  }
+
+  /**
+   * An existing index with documents keeps its rules, even the default ones.
+   */
+  public function testSettingUpAnIndexWithDocumentsKeepsItsRankingRules(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    $client->waitForTask($client->createIndex($uid, ['primaryKey' => 'search_api_id'])['taskUid']);
+    $defaults = $client->index($uid)->getRankingRules();
+    $client->waitForTask($client->index($uid)->addDocuments([['search_api_id' => 'someone_else']])['taskUid']);
+    $requests = $this->recordRequests();
+
+    $this->meilisearchBackend()->addIndex($index);
+    $this->assertSame($defaults, $client->index($uid)->getRankingRules());
+    $this->assertSame([], $this->scratchIndexRequests($requests, $uid), 'No scratch index is created.');
+  }
+
+  /**
+   * Creating an index, or setting up one with the module's rules, is cheap.
+   *
+   * The server's default rules are only read for an existing, empty index
+   * whose rules are not the module's.
+   */
+  public function testSettingUpAnIndexOnlyReadsTheDefaultsWhenNeeded(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $requests = $this->recordRequests();
+
+    // The index set up by the test already has the module's rules.
+    $this->meilisearchBackend()->addIndex($index);
+    $this->assertSame('sort', $client->index($uid)->getRankingRules()[0]);
+    $this->assertSame([], $this->scratchIndexRequests($requests, $uid));
+
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    $requests->exchangeArray([]);
+    $this->meilisearchBackend()->addIndex($index);
+    $this->assertSame('sort', $client->index($uid)->getRankingRules()[0]);
+    $this->assertSame([], array_values(preg_grep('~^GET /indexes/~', $requests->getArrayCopy())), 'A new index is not inspected.');
+    $this->assertSame([], $this->scratchIndexRequests($requests, $uid));
+  }
+
+  /**
+   * A failure while reading the default rules leaves the index's alone.
+   *
+   * Setting up the index still succeeds, and the scratch index is deleted.
+   */
+  public function testFailingToReadTheDefaultRankingRulesLeavesThemUnchanged(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    $client->waitForTask($client->createIndex($uid, ['primaryKey' => 'search_api_id'])['taskUid']);
+    $defaults = $client->index($uid)->getRankingRules();
+    $log = $this->captureMeilisearchLog();
+    $requests = $this->recordRequests(fn(RequestInterface $request) => $request->getMethod() === 'GET'
+      && preg_match('~^/indexes/[^/]+__defaults_[0-9a-f]+/settings$~', $request->getUri()->getPath()));
+
+    $this->meilisearchBackend()->addIndex($index);
+    $settings = $client->index($uid)->getSettings();
+    $this->assertSame($defaults, $settings['rankingRules']);
+    $this->assertContains('search_api_language', $settings['filterableAttributes'], 'The other settings are sent.');
+    $this->assertNotEmpty(preg_grep('~^DELETE /indexes/~', $this->scratchIndexRequests($requests, $uid)), 'The scratch index was created.');
+    $this->assertSame([$uid], $this->testIndexUids(), 'The scratch index is deleted.');
+    $this->assertStringContainsString("Could not compare the ranking rules of Meilisearch index $uid", implode("\n", $log[RfcLogLevel::WARNING] ?? []));
+  }
+
+  /**
+   * The scratch index is deleted even when waiting for its creation fails.
+   */
+  public function testScratchIndexIsDeletedWhenWaitingForItFails(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    $client->waitForTask($client->createIndex($uid, ['primaryKey' => 'search_api_id'])['taskUid']);
+    $defaults = $client->index($uid)->getRankingRules();
+    // Fails the first poll of a task after the scratch index is requested.
+    $scratch_requested = FALSE;
+    $requests = $this->recordRequests(function (RequestInterface $request) use (&$scratch_requested): bool {
+      if ($request->getMethod() === 'POST' && $request->getUri()->getPath() === '/indexes' && str_contains((string) $request->getBody(), '__defaults_')) {
+        $scratch_requested = TRUE;
+        return FALSE;
+      }
+      if ($scratch_requested && $request->getMethod() === 'GET' && str_starts_with($request->getUri()->getPath(), '/tasks/')) {
+        $scratch_requested = FALSE;
+        return TRUE;
+      }
+      return FALSE;
+    });
+
+    $this->meilisearchBackend()->addIndex($index);
+    $this->assertSame($defaults, $client->index($uid)->getRankingRules());
+    $this->assertNotEmpty(preg_grep('~^DELETE /indexes/~', $this->scratchIndexRequests($requests, $uid)));
+    $this->assertSame([$uid], $this->testIndexUids(), 'The scratch index is deleted.');
+  }
+
+  /**
+   * A key limited to the index prefix can read the server's default rules.
+   */
+  public function testDefaultRulesAreReadWithKeyScopedToThePrefix(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    $client->waitForTask($client->createIndex($uid, ['primaryKey' => 'search_api_id'])['taskUid']);
+
+    $this->withKeyFor([$this->meilisearchPrefix . '*'], function () use ($index, $uid, $client): void {
+      $this->meilisearchBackend()->addIndex($index);
+      $this->assertSame('sort', $client->index($uid)->getRankingRules()[0]);
+    });
+    $this->assertSame([$uid], $this->testIndexUids(), 'The scratch index is deleted.');
+  }
+
+  /**
+   * A key limited to the index itself cannot read the default rules.
+   *
+   * The rules are then left alone and setting up the index succeeds.
+   */
+  public function testDefaultRulesCannotBeReadWithKeyScopedToTheIndex(): void {
+    $index = Index::load($this->indexId);
+    $uid = $this->meilisearchBackend()->getIndexUid($index);
+    $client = $this->meilisearchClient();
+    $client->waitForTask($client->deleteIndex($uid)['taskUid']);
+    $client->waitForTask($client->createIndex($uid, ['primaryKey' => 'search_api_id'])['taskUid']);
+    $defaults = $client->index($uid)->getRankingRules();
+    $log = $this->captureMeilisearchLog();
+
+    $this->withKeyFor([$uid], function () use ($index): void {
+      $this->meilisearchBackend()->addIndex($index);
+    });
+    $settings = $client->index($uid)->getSettings();
+    $this->assertSame($defaults, $settings['rankingRules']);
+    $this->assertContains('search_api_language', $settings['filterableAttributes']);
+    $this->assertSame([$uid], $this->testIndexUids());
+    $this->assertStringContainsString("Could not compare the ranking rules of Meilisearch index $uid", implode("\n", $log[RfcLogLevel::WARNING] ?? []));
+  }
+
+  /**
+   * Runs code with a key that has the module's actions on some indexes.
+   *
+   * @param string[] $indexes
+   *   The index patterns of the key.
+   * @param callable $callback
+   *   The code to run.
+   */
+  protected function withKeyFor(array $indexes, callable $callback): void {
+    $server_config = &$GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config'];
+    $master_key = $server_config['api_key'];
+    $reset = function (): void {
+      \Drupal::configFactory()->reset();
+      \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+      \Drupal::entityTypeManager()->getStorage('search_api_index')->resetCache();
+    };
+    // Without "version" and "search", which are not needed here: recent
+    // Meilisearch versions refuse an index-scoped key with global actions.
+    $key = $this->meilisearchClient()->createKey([
+      'actions' => ['documents.*', 'indexes.*', 'settings.*', 'stats.get', 'tasks.get'],
+      'indexes' => $indexes,
+      'expiresAt' => NULL,
+    ]);
+    try {
+      $server_config['api_key'] = (string) $key->getKey();
+      $reset();
+      $callback();
+    }
+    finally {
+      $this->meilisearchClient()->deleteKey((string) $key->getUid());
+      $server_config['api_key'] = $master_key;
+      $reset();
+    }
+  }
+
+  /**
+   * Records the requests sent to Meilisearch, and fails some of them.
+   *
+   * Applies to the servers loaded afterwards.
+   *
+   * @param callable|null $fail
+   *   Receives each request and returns TRUE to answer it with an error.
+   *
+   * @return \ArrayObject<int, string>
+   *   Receives the method and path of each request.
+   */
+  protected function recordRequests(?callable $fail = NULL): \ArrayObject {
+    /** @var \ArrayObject<int, string> $requests */
+    $requests = new \ArrayObject();
+    $stack = HandlerStack::create();
+    $stack->push(fn(callable $handler) => function (RequestInterface $request, array $options) use ($handler, $fail, $requests) {
+      $requests[] = $request->getMethod() . ' ' . $request->getUri()->getPath();
+      if ($fail !== NULL && $fail($request)) {
+        return Create::promiseFor(new Response(500, ['Content-Type' => 'application/json'], '{"message":"Injected failure.","code":"internal","type":"internal","link":""}'));
+      }
+      return $handler($request, $options);
+    });
+    $this->container->set('meilisearch.api_factory', new MeilisearchApiFactory(new ClientFactory($stack)));
+    \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
+    return $requests;
+  }
+
+  /**
+   * Returns the recorded requests about a scratch index of an index.
+   *
+   * @param \ArrayObject<int, string> $requests
+   *   The requests recorded by recordRequests().
+   * @param string $uid
+   *   The index UID.
+   *
+   * @return string[]
+   *   The matching requests.
+   */
+  protected function scratchIndexRequests(\ArrayObject $requests, string $uid): array {
+    return array_values(preg_grep('~^\w+ /indexes/' . preg_quote($uid, '~') . '__defaults_~', $requests->getArrayCopy()));
+  }
+
+  /**
+   * Collects the messages logged on the meilisearch channel.
+   *
+   * @return \ArrayObject<int, string[]>
+   *   Receives the messages, with placeholders replaced, keyed by level.
+   */
+  protected function captureMeilisearchLog(): \ArrayObject {
+    /** @var \ArrayObject<int, string[]> $messages */
+    $messages = new \ArrayObject();
+    $logger = new class($messages) implements LoggerInterface {
+      use LoggerTrait;
+
+      public function __construct(protected \ArrayObject $messages) {}
+
+      /**
+       * {@inheritdoc}
+       */
+      public function log($level, string|\Stringable $message, array $context = []): void {
+        if (($context['channel'] ?? NULL) === 'meilisearch') {
+          $list = $this->messages[$level] ?? [];
+          $list[] = strtr((string) $message, array_filter($context, fn($value, $key) => str_starts_with((string) $key, '@') && is_scalar($value), ARRAY_FILTER_USE_BOTH));
+          $this->messages[$level] = $list;
+        }
+      }
+
+    };
+    \Drupal::service('logger.factory')->addLogger($logger);
+    return $messages;
   }
 
   /**
