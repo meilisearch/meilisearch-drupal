@@ -208,6 +208,24 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   }
 
   /**
+   * Returns the backend settings saved for this server, without overrides.
+   *
+   * The server form rebuilds the backend from the submitted values before it
+   * validates and submits them, so the configuration of the plugin then holds
+   * the submitted URL and key instead of the saved ones.
+   *
+   * @return array<string, mixed>
+   *   The saved settings, or an empty array for a new server.
+   */
+  protected function getStoredConfiguration(): array {
+    $server = $this->getServer();
+    if (!$server || $server->isNew()) {
+      return [];
+    }
+    return $this->configFactory->getEditable('search_api.server.' . $server->id())->get('backend_config') ?? [];
+  }
+
+  /**
    * {@inheritdoc}
    */
   public function buildConfigurationForm(array $form, FormStateInterface $form_state): array {
@@ -223,7 +241,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       '#type' => 'password',
       '#title' => $this->t('API key'),
       '#description' => $this->t('An API key with the <em>search</em>, <em>documents.*</em>, <em>indexes.*</em>, <em>settings.*</em>, <em>tasks.get</em>, <em>stats.get</em> and <em>version</em> actions. Avoid the master key. @state To keep the key out of exported configuration, set it in settings.php: <code>@snippet</code>', [
-        '@state' => $this->configuration['api_key'] !== '' ? $this->t('A key is stored; leave empty to keep it. A URL with another host, scheme or port needs the key again.') : '',
+        '@state' => ($this->getStoredConfiguration()['api_key'] ?? '') !== '' ? $this->t('A key is stored; leave empty to keep it. A URL with another host, scheme or port needs the key again.') : '',
         '@snippet' => "\$config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');",
       ]),
     ];
@@ -344,12 +362,14 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     // another one. A key set in settings.php cannot be entered here, so the
     // documentation asks to override the URL along with it. A URL set in
     // settings.php is the one the key is used with, whatever is stored.
-    $previous_url = (string) ($overridden['url'] ?? $this->configuration['url']);
-    if ($key === '' && !isset($overridden['api_key']) && $this->configuration['api_key'] !== '' && $this->getOrigin($url) !== $this->getOrigin($previous_url)) {
+    $stored = $this->getStoredConfiguration();
+    $stored_key = (string) ($stored['api_key'] ?? '');
+    $previous_url = (string) ($overridden['url'] ?? $stored['url'] ?? '');
+    if ($key === '' && !isset($overridden['api_key']) && $stored_key !== '' && $this->getOrigin($url) !== $this->getOrigin($previous_url)) {
       $form_state->setErrorByName('api_key', $this->t('The URL points at another host: enter the API key again.'));
       return;
     }
-    $api = $this->apiFactory->create($url, $key !== '' ? $key : (string) ($overridden['api_key'] ?? $this->configuration['api_key']));
+    $api = $this->apiFactory->create($url, $key !== '' ? $key : (string) ($overridden['api_key'] ?? $stored_key));
     try {
       $api->version();
     }
@@ -383,9 +403,12 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
    */
   public function submitConfigurationForm(array &$form, FormStateInterface $form_state): void {
     $values = $form_state->getValues();
+    // An empty key field keeps the saved key: validation made sure the URL
+    // still points at the host it was entered for.
+    $stored = $this->getStoredConfiguration();
     $this->setConfiguration([
       'url' => (string) $values['url'],
-      'api_key' => ($values['api_key'] ?? '') !== '' ? (string) $values['api_key'] : (string) $this->configuration['api_key'],
+      'api_key' => ($values['api_key'] ?? '') !== '' ? (string) $values['api_key'] : (string) ($stored['api_key'] ?? ''),
       'index_prefix' => (string) ($values['index_prefix'] ?? ''),
       'search_mode' => (string) $values['search_mode'],
       'semantic_ratio' => (float) $values['semantic_ratio'],
@@ -398,7 +421,6 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     // never leak into exported configuration.
     $overridden = $this->getOverriddenSettings();
     if ($overridden) {
-      $stored = $this->configFactory->getEditable('search_api.server.' . $this->getServer()->id())->get('backend_config') ?? [];
       $configuration = $this->configuration;
       foreach (array_keys($overridden) as $key) {
         $configuration[$key] = $stored[$key] ?? $this->defaultConfiguration()[$key];

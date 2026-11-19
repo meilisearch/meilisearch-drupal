@@ -6,6 +6,7 @@ namespace Drupal\Tests\meilisearch\Kernel;
 
 use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
 use Drupal\Core\Form\FormState;
+use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Http\ClientFactory;
 use Drupal\Core\Logger\RfcLogLevel;
 use Drupal\KernelTests\KernelTestBase;
@@ -212,10 +213,12 @@ class MeilisearchBackendTest extends KernelTestBase {
   public function testEmptyApiKeyKeepsStoredKey(): void {
     // Let the form manage the key: drop its settings.php override.
     unset($GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config']['api_key']);
+    \Drupal::configFactory()->getEditable('search_api.server.meilisearch_test_server')
+      ->set('backend_config.api_key', 'stored-secret')
+      ->save();
     \Drupal::configFactory()->reset();
     \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
     $backend = $this->meilisearchBackend();
-    $backend->setConfiguration(['api_key' => 'stored-secret'] + $backend->getConfiguration());
 
     $form_state = new FormState();
     $form = $backend->buildConfigurationForm([], $form_state);
@@ -242,11 +245,14 @@ class MeilisearchBackendTest extends KernelTestBase {
       \Drupal::entityTypeManager()->getStorage('search_api_server')->resetCache();
     };
     $requests = $this->interceptRequestsTo(['search.example', 'other.example']);
+    \Drupal::configFactory()->getEditable('search_api.server.meilisearch_test_server')
+      ->set('backend_config.url', 'http://search.example/meilisearch')
+      ->set('backend_config.api_key', 'stored-secret')
+      ->save();
     $reset();
 
     $validate = function (array $values): FormState {
       $backend = $this->meilisearchBackend();
-      $backend->setConfiguration(['url' => 'http://search.example/meilisearch', 'api_key' => 'stored-secret'] + $backend->getConfiguration());
       $form_state = new FormState();
       $form = $backend->buildConfigurationForm([], $form_state);
       $form_state->setValues($values + ['api_key' => ''] + $backend->getConfiguration());
@@ -312,6 +318,94 @@ class MeilisearchBackendTest extends KernelTestBase {
   }
 
   /**
+   * The server edit form keeps the stored key for its host only.
+   *
+   * The form rebuilds the backend from the submitted values before it is
+   * validated and submitted, so this goes through the whole form.
+   */
+  public function testServerFormKeepsTheStoredKeyForItsHost(): void {
+    // Let the form manage the URL and the key: drop their overrides.
+    $server_config = &$GLOBALS['config']['search_api.server.meilisearch_test_server']['backend_config'];
+    unset($server_config['url'], $server_config['api_key']);
+    // Submits the form over the stored settings, and returns the form errors,
+    // the saved URL and key, and the intercepted requests.
+    $submit = function (string $url, string $key = ''): array {
+      \Drupal::configFactory()->getEditable('search_api.server.meilisearch_test_server')
+        ->set('backend_config.url', 'http://search.example/meilisearch')
+        ->set('backend_config.api_key', 'stored-secret')
+        ->save();
+      $requests = $this->interceptRequestsTo(['search.example', 'other.example']);
+      $form_state = $this->submitServerForm(['url' => $url, 'api_key' => $key]);
+      $saved = \Drupal::configFactory()->getEditable('search_api.server.meilisearch_test_server')->get('backend_config');
+      return [$form_state->getErrors(), [$saved['url'], $saved['api_key']], array_unique($requests->getArrayCopy())];
+    };
+
+    [$errors, $saved, $requests] = $submit('https://other.example');
+    $this->assertArrayHasKey('backend_config][api_key', $errors, 'A new host needs the key again.');
+    $this->assertSame(['http://search.example/meilisearch', 'stored-secret'], $saved, 'Nothing is saved.');
+    $this->assertSame([], $requests, 'Nothing is sent to the new host.');
+
+    foreach (['http://search.example', 'http://SEARCH.example:80/meilisearch/', 'http://search.example/other'] as $url) {
+      [$errors, $saved, $requests] = $submit($url);
+      $this->assertSame([], $errors, "$url keeps the stored key.");
+      $this->assertSame('stored-secret', $saved[1], "$url keeps the stored key.");
+      $this->assertSame(['http://search.example:80 Bearer stored-secret'], $requests);
+    }
+
+    [$errors, $saved, $requests] = $submit('https://other.example', 'new-secret');
+    $this->assertSame([], $errors, 'A key entered with the new URL is accepted.');
+    $this->assertSame(['https://other.example', 'new-secret'], $saved);
+    $this->assertSame(['https://other.example:443 Bearer new-secret'], $requests);
+
+    // A URL set in settings.php is the one the stored key is used with.
+    $server_config['url'] = getenv('MEILISEARCH_TEST_URL');
+    [$errors, $saved, $requests] = $submit('https://other.example');
+    $this->assertSame([], $errors, 'The overridden URL keeps the stored key.');
+    $this->assertSame(['http://search.example/meilisearch', 'stored-secret'], $saved);
+    $this->assertSame([], $requests);
+  }
+
+  /**
+   * A new server has no stored key to keep or to protect.
+   */
+  public function testServerFormCreatesServer(): void {
+    $requests = $this->interceptRequestsTo(['search.example']);
+    $form_object = \Drupal::entityTypeManager()->getFormObject('search_api_server', 'default');
+    $form_object->setEntity(Server::create(['backend' => 'meilisearch']));
+    $form_state = (new FormState())->setValues([
+      'name' => 'New server',
+      'id' => 'new_server',
+      'backend' => 'meilisearch',
+      'backend_config' => ['url' => 'http://search.example', 'api_key' => 'new-secret'],
+      'op' => 'Save',
+    ]);
+    \Drupal::formBuilder()->submitForm($form_object, $form_state);
+    $this->assertSame([], $form_state->getErrors());
+    $config = \Drupal::configFactory()->getEditable('search_api.server.new_server')->get('backend_config');
+    $this->assertSame(['http://search.example', 'new-secret'], [$config['url'], $config['api_key']]);
+    $this->assertContains('http://search.example:80 Bearer new-secret', $requests->getArrayCopy());
+  }
+
+  /**
+   * Submits the edit form of the test server, as loaded by its route.
+   *
+   * @param array<string, string> $backend_config
+   *   The submitted backend settings; the others keep their form defaults.
+   */
+  protected function submitServerForm(array $backend_config): FormStateInterface {
+    \Drupal::configFactory()->reset();
+    $storage = \Drupal::entityTypeManager()->getStorage('search_api_server');
+    $storage->resetCache();
+    $server = $storage->loadOverrideFree('meilisearch_test_server');
+    $this->assertInstanceOf(Server::class, $server);
+    $form_object = \Drupal::entityTypeManager()->getFormObject('search_api_server', 'edit');
+    $form_object->setEntity($server);
+    $form_state = (new FormState())->setValues(['backend_config' => $backend_config, 'op' => 'Save']);
+    \Drupal::formBuilder()->submitForm($form_object, $form_state);
+    return $form_state;
+  }
+
+  /**
    * Answers the requests sent to some hosts and records them.
    *
    * Applies to the servers loaded afterwards.
@@ -333,6 +427,10 @@ class MeilisearchBackendTest extends KernelTestBase {
       }
       $port = $uri->getPort() ?? ($uri->getScheme() === 'https' ? 443 : 80);
       $requests[] = sprintf('%s://%s:%d %s', $uri->getScheme(), $uri->getHost(), $port, $request->getHeaderLine('Authorization'));
+      if (!str_ends_with($uri->getPath(), '/version')) {
+        // Saving a server sets up its indexes: fail as an unavailable host.
+        return Create::promiseFor(new Response(503, ['Content-Type' => 'application/json'], '{"message":"Intercepted.","code":"intercepted","type":"system","link":""}'));
+      }
       return Create::promiseFor(new Response(200, ['Content-Type' => 'application/json'], '{"pkgVersion":"1.54.0"}'));
     });
     $this->container->set('meilisearch.api_factory', new MeilisearchApiFactory(new ClientFactory($stack)));
