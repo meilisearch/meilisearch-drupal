@@ -60,6 +60,11 @@ interface MeilisearchApiServiceInterface {
   public function deleteIndex(string $uid): array;
 
   /**
+   * Returns the settings of an index.
+   */
+  public function getSettings(string $uid): array;
+
+  /**
    * Updates the settings of an index. Returns the enqueued task.
    */
   public function updateSettings(string $uid, array $settings): array;

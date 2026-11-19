@@ -43,7 +43,7 @@ You need a Meilisearch Cloud project and the module [installed](/installation). 
 
 ## Keep the key out of configuration
 
-Configuration exports (`drush config:export`) contain the server settings, API key included. Set the key, and the URL if you like, in `settings.php` from environment variables instead:
+Configuration exports (`drush config:export`) contain the server settings, API key included. Set the key and the URL in `settings.php` from environment variables instead. Override both: with only the key overridden, the URL stays editable in the server form, and the key would be sent to whatever URL is saved there:
 
 ```php
 $config['search_api.server.meilisearch']['backend_config']['url'] = getenv('MEILISEARCH_URL');
@@ -86,7 +86,7 @@ To let an environment search production's data without writing to it, use produc
 
 ## Relevancy settings
 
-The module manages which attributes are searchable, filterable and sortable, and keeps every attribute displayed: it needs `search_api_id` and the highlighted fields returned, so a `displayedAttributes` restriction made in the dashboard is reset the next time it sends settings (see [What the module manages](/guides/configuration#what-the-module-manages)). Synonyms, stop words, typo tolerance, ranking rules and embedders stay in Meilisearch: edit them in the Cloud dashboard, which the server edit form links to.
+The module manages which attributes are searchable, filterable and sortable, and keeps every attribute displayed: it needs `search_api_id` and the highlighted fields returned, so a `displayedAttributes` restriction made in the dashboard is reset the next time it sends settings (see [What the module manages](/guides/configuration#what-the-module-manages)). Synonyms, stop words, typo tolerance, ranking rules and embedders stay in Meilisearch: edit them in the Cloud dashboard, which the server edit form links to. The module only sets the ranking rules of an index it creates, or of an existing one that is empty and still has the default rules (see [What the module manages](/guides/configuration#what-the-module-manages)).
 
 Cloud also enables [click analytics](/guides/analytics) and [semantic search](/guides/semantic-search).
 

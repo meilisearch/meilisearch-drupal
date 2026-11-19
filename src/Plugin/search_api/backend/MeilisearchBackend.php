@@ -208,6 +208,24 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   }
 
   /**
+   * Returns the backend settings saved for this server, without overrides.
+   *
+   * The server form rebuilds the backend from the submitted values before it
+   * validates and submits them, so the configuration of the plugin then holds
+   * the submitted URL and key instead of the saved ones.
+   *
+   * @return array<string, mixed>
+   *   The saved settings, or an empty array for a new server.
+   */
+  protected function getStoredConfiguration(): array {
+    $server = $this->getServer();
+    if (!$server || $server->isNew()) {
+      return [];
+    }
+    return $this->configFactory->getEditable('search_api.server.' . $server->id())->get('backend_config') ?? [];
+  }
+
+  /**
    * {@inheritdoc}
    */
   public function buildConfigurationForm(array $form, FormStateInterface $form_state): array {
@@ -223,7 +241,7 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
       '#type' => 'password',
       '#title' => $this->t('API key'),
       '#description' => $this->t('An API key with the <em>search</em>, <em>documents.*</em>, <em>indexes.*</em>, <em>settings.*</em>, <em>tasks.get</em>, <em>stats.get</em> and <em>version</em> actions. Avoid the master key. @state To keep the key out of exported configuration, set it in settings.php: <code>@snippet</code>', [
-        '@state' => $this->configuration['api_key'] !== '' ? $this->t('A key is stored; leave empty to keep it.') : '',
+        '@state' => ($this->getStoredConfiguration()['api_key'] ?? '') !== '' ? $this->t('A key is stored; leave empty to keep it. A URL with another host, scheme or port needs the key again.') : '',
         '@snippet' => "\$config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');",
       ]),
     ];
@@ -340,7 +358,18 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     }
 
     $key = (string) $form_state->getValue('api_key');
-    $api = $this->apiFactory->create($url, $key !== '' ? $key : (string) ($overridden['api_key'] ?? $this->configuration['api_key']));
+    // A stored key belongs to the host it was entered for: never send it to
+    // another one. A key set in settings.php cannot be entered here, so the
+    // documentation asks to override the URL along with it. A URL set in
+    // settings.php is the one the key is used with, whatever is stored.
+    $stored = $this->getStoredConfiguration();
+    $stored_key = (string) ($stored['api_key'] ?? '');
+    $previous_url = (string) ($overridden['url'] ?? $stored['url'] ?? '');
+    if ($key === '' && !isset($overridden['api_key']) && $stored_key !== '' && $this->getOrigin($url) !== $this->getOrigin($previous_url)) {
+      $form_state->setErrorByName('api_key', $this->t('The URL points at another host: enter the API key again.'));
+      return;
+    }
+    $api = $this->apiFactory->create($url, $key !== '' ? $key : (string) ($overridden['api_key'] ?? $stored_key));
     try {
       $api->version();
     }
@@ -353,13 +382,33 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
   }
 
   /**
+   * Returns the origin of a URL: scheme, lowercased host and port.
+   *
+   * The port defaults to that of the scheme, so "http://example.com" and
+   * "http://EXAMPLE.com:80/path" have the same origin.
+   */
+  protected function getOrigin(string $url): string {
+    $parts = parse_url($url) ?: [];
+    $scheme = strtolower($parts['scheme'] ?? '');
+    $port = $parts['port'] ?? match ($scheme) {
+      'http' => 80,
+      'https' => 443,
+      default => 0,
+    };
+    return sprintf('%s://%s:%d', $scheme, strtolower($parts['host'] ?? ''), $port);
+  }
+
+  /**
    * {@inheritdoc}
    */
   public function submitConfigurationForm(array &$form, FormStateInterface $form_state): void {
     $values = $form_state->getValues();
+    // An empty key field keeps the saved key: validation made sure the URL
+    // still points at the host it was entered for.
+    $stored = $this->getStoredConfiguration();
     $this->setConfiguration([
       'url' => (string) $values['url'],
-      'api_key' => ($values['api_key'] ?? '') !== '' ? (string) $values['api_key'] : (string) $this->configuration['api_key'],
+      'api_key' => ($values['api_key'] ?? '') !== '' ? (string) $values['api_key'] : (string) ($stored['api_key'] ?? ''),
       'index_prefix' => (string) ($values['index_prefix'] ?? ''),
       'search_mode' => (string) $values['search_mode'],
       'semantic_ratio' => (float) $values['semantic_ratio'],
@@ -372,7 +421,6 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     // never leak into exported configuration.
     $overridden = $this->getOverriddenSettings();
     if ($overridden) {
-      $stored = $this->configFactory->getEditable('search_api.server.' . $this->getServer()->id())->get('backend_config') ?? [];
       $configuration = $this->configuration;
       foreach (array_keys($overridden) as $key) {
         $configuration[$key] = $stored[$key] ?? $this->defaultConfiguration()[$key];
@@ -487,9 +535,13 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     }
     // Search API expects explicit sorts to be strict, while Meilisearch ranks
     // "sort" after the relevancy rules by default. Moving it first has no
-    // effect on searches without a sort. Only done for new indexes: ranking
-    // rules are then managed in Meilisearch (dashboard, API or CLI).
-    $this->pushSettings($index, $created ? ['rankingRules' => self::RANKING_RULES] : []);
+    // effect on searches without a sort. Only done for new indexes, and for
+    // existing ones that are empty and still have the server's default rules,
+    // as an earlier attempt that failed after creating the index leaves them:
+    // ranking rules are otherwise managed in Meilisearch (dashboard, API or
+    // CLI).
+    $sort_first = $created || $this->hasDefaultRankingRules($uid);
+    $this->pushSettings($index, $sort_first ? ['rankingRules' => self::RANKING_RULES] : []);
     $this->existingIndexes[$uid] = TRUE;
   }
 
@@ -874,6 +926,101 @@ class MeilisearchBackend extends BackendPluginBase implements PluginFormInterfac
     }
     $this->existingIndexes[$uid] = TRUE;
     return !$exists;
+  }
+
+  /**
+   * Returns TRUE if an index is empty and has the server's default rules.
+   *
+   * Returns FALSE, without further requests, for an index with documents or
+   * with the module's rules. If the check fails, a warning is logged and the
+   * rules are reported as customised, so they are left alone.
+   */
+  protected function hasDefaultRankingRules(string $uid): bool {
+    $api = $this->getApi();
+    try {
+      if ((int) ($api->indexStats($uid)['numberOfDocuments'] ?? 0) > 0) {
+        return FALSE;
+      }
+      $rules = $api->getSettings($uid)['rankingRules'] ?? NULL;
+      if (!is_array($rules) || $rules === self::RANKING_RULES) {
+        return FALSE;
+      }
+      return $rules === $this->readDefaultRankingRules($uid);
+    }
+    catch (MeilisearchApiException $e) {
+      // A key limited to exact index names cannot create the scratch index.
+      $this->logger->warning('Could not compare the ranking rules of Meilisearch index @uid with the defaults of the server, so they were left unchanged: @message', [
+        '@uid' => $uid,
+        '@message' => $e->getMessage(),
+      ]);
+      return FALSE;
+    }
+  }
+
+  /**
+   * Returns the default ranking rules of the Meilisearch server.
+   *
+   * They differ between Meilisearch versions and no route returns them, so
+   * they are read from a new, empty scratch index, deleted afterwards. Its UID
+   * starts with the index's, so a key limited to the index prefix may create
+   * it.
+   *
+   * @param string $uid
+   *   The UID of the index the defaults are compared with.
+   *
+   * @return string[]
+   *   The ranking rules.
+   *
+   * @throws \Drupal\meilisearch\Api\MeilisearchApiException
+   */
+  protected function readDefaultRankingRules(string $uid): array {
+    $api = $this->getApi();
+    $scratch = $uid . '__defaults_' . bin2hex(random_bytes(4));
+    $may_exist = FALSE;
+    try {
+      try {
+        $task = $api->createIndex($scratch, DocumentConverterInterface::PRIMARY_KEY);
+      }
+      catch (MeilisearchApiException $e) {
+        // Without an answer from Meilisearch, the creation may have been
+        // enqueued all the same.
+        $may_exist = $e->getErrorCode() === NULL;
+        throw $e;
+      }
+      $may_exist = TRUE;
+      $api->waitForTask((int) $task['taskUid']);
+      $rules = $api->getSettings($scratch)['rankingRules'] ?? NULL;
+      if (!is_array($rules)) {
+        throw new MeilisearchApiException(sprintf('The settings of Meilisearch index %s have no ranking rules.', $scratch));
+      }
+      return $rules;
+    }
+    finally {
+      if ($may_exist) {
+        $this->deleteScratchIndex($scratch);
+      }
+    }
+  }
+
+  /**
+   * Deletes a scratch index and waits for it to be gone.
+   *
+   * Tasks on an index run in order, so the deletion also removes an index
+   * whose creation is still enqueued. Failures are logged, not thrown.
+   */
+  protected function deleteScratchIndex(string $scratch): void {
+    $api = $this->getApi();
+    try {
+      $api->waitForTask((int) $api->deleteIndex($scratch)['taskUid']);
+    }
+    catch (MeilisearchApiException $e) {
+      if ($e->getErrorCode() !== 'index_not_found') {
+        $this->logger->error('Could not delete the scratch Meilisearch index @scratch; delete it by hand: @message', [
+          '@scratch' => $scratch,
+          '@message' => $e->getMessage(),
+        ]);
+      }
+    }
   }
 
   /**
