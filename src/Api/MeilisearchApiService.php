@@ -132,6 +132,13 @@ class MeilisearchApiService implements MeilisearchApiServiceInterface {
   /**
    * {@inheritdoc}
    */
+  public function getSettings(string $uid): array {
+    return $this->call(fn() => $this->client->index($uid)->getSettings());
+  }
+
+  /**
+   * {@inheritdoc}
+   */
   public function updateSettings(string $uid, array $settings): array {
     return $this->call(fn() => $this->client->index($uid)->updateSettings($settings));
   }

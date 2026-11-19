@@ -295,6 +295,41 @@ class MeilisearchApiServiceTest extends TestCase {
   }
 
   /**
+   * @covers ::getSettings
+   */
+  public function testGetSettingsReturnsTheIndexSettings(): void {
+    $rules = ['words', 'typo', 'proximity', 'attributeRank', 'sort', 'wordPosition', 'exactness'];
+    $api = $this->api([$this->json(['rankingRules' => $rules, 'filterableAttributes' => []])]);
+    $this->assertSame($rules, $api->getSettings('idx')['rankingRules']);
+    $request = $this->history[0]['request'];
+    $this->assertSame('GET', $request->getMethod());
+    $this->assertSame('http://meili.test:7700/indexes/idx/settings', (string) $request->getUri());
+  }
+
+  /**
+   * @covers ::getSettings
+   */
+  public function testGetSettingsErrorsThrowApiException(): void {
+    $api = $this->api([
+      $this->json([
+        'message' => 'Index `idx` not found.',
+        'code' => 'index_not_found',
+        'type' => 'invalid_request',
+        'link' => '',
+      ], 404),
+    ]);
+    try {
+      $api->getSettings('idx');
+      $this->fail('An API error must throw.');
+    }
+    catch (MeilisearchApiException $e) {
+      $this->assertSame('index_not_found', $e->getErrorCode());
+    }
+    $this->expectException(MeilisearchApiException::class);
+    $this->api([new ConnectException('Connection refused', new Request('GET', '/'))])->getSettings('idx');
+  }
+
+  /**
    * @covers ::multiSearch
    */
   public function testMultiSearchPostsQueriesAndReturnsResults(): void {
