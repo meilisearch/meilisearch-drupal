@@ -7,7 +7,6 @@ namespace Drupal\Tests\meilisearch\Kernel;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\search_api\Entity\Index;
 use Drupal\Tests\search_api\Functional\ExampleContentTrait;
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
@@ -113,8 +112,9 @@ class MeilisearchHighlightingTest extends KernelTestBase {
    *
    * @param string $crop_marker
    *   The configured crop marker.
+   *
+   * @dataProvider cropMarkerProvider
    */
-  #[DataProvider('cropMarkerProvider')]
   public function testHighlightedFieldsOnlyHoldUncroppedValues(string $crop_marker): void {
     $this->configureHighlighting($crop_marker);
     $this->addTestEntity(2, [
