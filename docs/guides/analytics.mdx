@@ -2,7 +2,7 @@
 title: Click analytics
 ---
 
-The **Meilisearch Analytics** submodule sends clicks on search results to [Meilisearch Cloud analytics](https://www.meilisearch.com/docs/capabilities/analytics/overview), which then reports click-through rate and average click position. Self-hosted Meilisearch has no analytics: the submodule does nothing there.
+The **Meilisearch Analytics** submodule sends clicks on search results to [Meilisearch Cloud analytics](https://www.meilisearch.com/docs/capabilities/analytics/overview), which then reports click-through rate and average click position. Self-hosted Meilisearch has no analytics: the submodule does nothing there. A server counts as Meilisearch Cloud when its URL is on `meilisearch.io`, so a Cloud project reached through a custom domain or a proxy is not tracked either.
 
 ```bash
 drush en meilisearch_analytics -y
@@ -10,11 +10,15 @@ drush en meilisearch_analytics -y
 
 ## How it works
 
-- Searches ask Meilisearch for their query UID and send a pseudonymous visitor ID: a keyed hash of the user ID for authenticated users, a random first-party cookie (`meilisearch_uid`) for anonymous visitors.
+- Searches ask Meilisearch for their query UID and send a pseudonymous visitor ID: a keyed hash of the user ID for authenticated users, the random ID in the first-party `meilisearch_uid` cookie for anonymous visitors.
+- The anonymous visitor cookie is created in the browser by the click tracking script, when a page with tracked results loads. The site never sets it from the server, so a site can hold the script back until the visitor consents. As a result, a new anonymous visitor's first search is sent without a visitor ID; the clicks on its results, and later searches, carry the cookie's ID. Clicks from anonymous visitors without a valid cookie, for example because their browser blocks cookies, are all sent under the shared visitor ID `anonymous`. Click-through rate and click position are unaffected, since a click is tied to its search by the query UID, but per-visitor figures count these visitors as one.
 - Rows of views on Meilisearch indexes, in the *Unformatted list* and *HTML list* styles, get `data-meilisearch-*` attributes, and a small script reports clicks on links inside them.
-- Clicks go to `/meilisearch/analytics/click` on your site, never to Meilisearch directly, so no key reaches the browser. The endpoint validates its input, refuses cross-site requests and accepts 60 clicks per minute per client.
+- Clicks go to `/meilisearch/analytics/click` on your site, never to Meilisearch directly, so no key reaches the browser. The endpoint validates its input, refuses cross-site requests and accepts 60 well-formed clicks per minute per client IP address; further clicks from that IP in the same minute are refused and not sent.
+- The endpoint answers every well-formed click with `204 No Content`, whether or not the index exists, is enabled or is on Meilisearch Cloud, so it does not tell visitors which indexes your site has. Clicks on disabled indexes are not sent. To check that clicks reach Meilisearch, look for the debug-level entries in the `meilisearch` log channel: each click on an existing index is logged as relayed or dropped, with the reason. Clicks on unknown indexes are not logged.
 
-Pages showing tracked results are not cached, and Search API does not cache Meilisearch results while the submodule is on, since each search has its own query UID.
+<Warning>Behind a CDN, load balancer or reverse proxy, configure Drupal's `reverse_proxy` settings (`$settings['reverse_proxy']` and `$settings['reverse_proxy_addresses']` in `settings.php`). Otherwise every request seems to come from the proxy's IP address, all visitors share one limit of 60 clicks per minute, and clicks beyond it are lost. Visitors behind one shared address, such as an office network, also share the limit.</Warning>
+
+Pages showing tracked results are not cached, and Search API does not cache the results of Meilisearch Cloud servers while the submodule is on, since each search has its own query UID. Searches on other servers keep their caching and get no header, attribute, script or cookie.
 
 ## Conversions
 

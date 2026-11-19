@@ -13,4 +13,6 @@ Enable the **Meilisearch highlighting** processor on the index (**Processors** t
 
 <Warning>Views filters the excerpt with Drupal's basic HTML allow-list: use `<strong>`, `<em>`, `<cite>` or `<code>` as tags. `<mark>` is removed. Style the tag to look like a highlighter if you like.</Warning>
 
-Snippets from different fields are joined with the crop marker. Matches are highlighted and cropped by Meilisearch. The module escapes the text before inserting the tags, so markup in indexed content is displayed as text, never rendered. Each result also carries a `highlighted_fields` extra data array.
+Snippets from different fields are joined with the crop marker. Matches are highlighted and cropped by Meilisearch. The module escapes the text before inserting the tags, so markup in indexed content is displayed as text, never rendered.
+
+Each result also carries a `highlighted_fields` extra data array, used by the Views field option **Use highlighted field data**. It only contains the matching values that fit within the excerpt length uncropped. A longer value is cropped to a snippet: the snippet goes into the excerpt, but not into `highlighted_fields`, so Views shows that field's whole value without highlighting instead of replacing it with the snippet.

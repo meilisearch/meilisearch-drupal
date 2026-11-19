@@ -31,13 +31,16 @@ Using Meilisearch Cloud? See [`docs/guides/meilisearch-cloud.mdx`](docs/guides/m
 2. Add an index on that server, pick content and fields, then **Index now**.
 3. Build a view on the index with a fulltext filter.
 
-Keep the API key out of configuration exports by setting it in `settings.php`:
+Keep the API key out of configuration exports by setting it in `settings.php`, together with the URL so the form cannot send the key to another host:
 
 ```php
+$config['search_api.server.SERVER_ID']['backend_config']['url'] = getenv('MEILISEARCH_URL');
 $config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');
 ```
 
-Use a dedicated key with the `search`, `documents.*`, `indexes.*`, `settings.*`, `tasks.get` and `version` actions rather than the master key.
+A key stored in configuration is kept when the key field is left empty, except when the URL's scheme, host or port changes: the key must then be entered again.
+
+Use a dedicated key with the `search`, `documents.*`, `indexes.*`, `settings.*`, `stats.get`, `tasks.get` and `version` actions rather than the master key. The actions of a Meilisearch key cannot be edited afterwards: to add one, create a new key and replace the old one.
 
 ## Features
 
@@ -51,7 +54,7 @@ Use a dedicated key with the `search`, `documents.*`, `indexes.*`, `settings.*`,
 - `meilisearch_analytics` submodule: click analytics on Meilisearch Cloud
 - `hook_meilisearch_search_params_alter()` and `hook_meilisearch_request_headers_alter()`
 
-Synonyms, stop words, ranking rules and embedders are Meilisearch settings: manage them in the Cloud dashboard, the CLI or the API. The module only sends the attribute lists, pagination and faceting limits, and makes `sort` the first ranking rule of the indexes it creates so explicit sorts are strict.
+Synonyms, stop words, ranking rules and embedders are Meilisearch settings: manage them in the Cloud dashboard, the CLI or the API. The module only sends the attribute lists (searchable, filterable, sortable, and displayed, which it always resets to all attributes so it can read result IDs and highlights), pagination and faceting limits, and makes `sort` the first ranking rule of the indexes it creates so explicit sorts are strict. It also does so for an existing index it sets up when that index has no documents and still has the server's default ranking rules, which it reads from an empty scratch index (`INDEX_UID__defaults_…`) created and deleted for the purpose; other existing indexes keep theirs.
 
 ## How searches differ from the Database backend
 
@@ -59,7 +62,7 @@ Synonyms, stop words, ranking rules and embedders are Meilisearch settings: mana
 - The last word matches as a prefix and typos are tolerated.
 - Conditions and facets on fulltext fields use whole field values.
 - Exact conditions on string values over about 250 bytes cannot match.
-- Random sorting is not supported; "relevance, then X" with keywords is relevance order.
+- Random sorting is not supported. With keywords, sorts placed after *Relevance* are ignored: "X, Relevance, Y" orders by X, then relevance. Without keywords, *Relevance* is skipped and the other sorts apply.
 
 Details: [`docs/reference/search-behavior.mdx`](docs/reference/search-behavior.mdx).
 

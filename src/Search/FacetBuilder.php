@@ -170,9 +170,9 @@ final class FacetBuilder {
       $field = $facet['field'];
       $positions = $this->positions[$id] ?? [];
       $source = isset($positions['values']) ? $responses[$positions['values'] - 1] : $main;
-      $counts = $source['facetDistribution'][$field] ?? [];
+      $counts = $this->distribution($source, $field);
       if (isset($positions['all'])) {
-        foreach (array_keys($responses[$positions['all'] - 1]['facetDistribution'][$field] ?? []) as $value) {
+        foreach (array_keys($this->distribution($responses[$positions['all'] - 1], $field)) as $value) {
           $counts[$value] ??= 0;
         }
       }
@@ -200,6 +200,38 @@ final class FacetBuilder {
       $output[$id] = $values;
     }
     return $output;
+  }
+
+  /**
+   * Returns the facet distribution of a field, keyed by Search API value.
+   *
+   * Meilisearch names the values of a boolean "true" and "false", while
+   * Search API facets use "1" and "0", like the indexed values of other
+   * backends. Only boolean fields are converted: a string field can hold the
+   * literal "true".
+   *
+   * @param array $response
+   *   A search response.
+   * @param string $field
+   *   The field ID.
+   *
+   * @return array<int|string, int>
+   *   Counts keyed by facet value.
+   */
+  protected function distribution(array $response, string $field): array {
+    $distribution = $response['facetDistribution'][$field] ?? [];
+    if (!$distribution || $this->query->getIndex()->getField($field)?->getType() !== 'boolean') {
+      return $distribution;
+    }
+    $counts = [];
+    foreach ($distribution as $value => $count) {
+      $counts[match ((string) $value) {
+        'true' => '1',
+        'false' => '0',
+        default => $value,
+      }] = $count;
+    }
+    return $counts;
   }
 
   /**

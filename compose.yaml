@@ -1,6 +1,6 @@
 # Local test environment.
-#   docker compose watch                          # keep the module synced
-#   docker compose exec tests scripts/phpunit     # run the whole suite
+#   docker compose watch    # keep the module synced
+#   docker compose exec tests web/modules/custom/meilisearch/scripts/phpunit
 # or one-shot: scripts/test.sh [phpunit args]
 services:
   meilisearch:
@@ -18,6 +18,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+      args:
+        DRUPAL_CORE: "${DRUPAL_CORE:-^11}"
     environment:
       MEILISEARCH_TEST_URL: http://meilisearch:7700
       MEILISEARCH_TEST_KEY: testMasterKey123

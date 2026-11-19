@@ -43,7 +43,7 @@ You need a Meilisearch Cloud project and the module [installed](/installation). 
 
 ## Keep the key out of configuration
 
-Configuration exports (`drush config:export`) contain the server settings, API key included. Set the key, and the URL if you like, in `settings.php` from environment variables instead:
+Configuration exports (`drush config:export`) contain the server settings, API key included. Set the key and the URL in `settings.php` from environment variables instead. Override both: with only the key overridden, the URL stays editable in the server form, and the key would be sent to whatever URL is saved there:
 
 ```php
 $config['search_api.server.meilisearch']['backend_config']['url'] = getenv('MEILISEARCH_URL');
@@ -54,7 +54,7 @@ Replace `meilisearch` with your server's machine name. The server form then show
 
 ## A dedicated key
 
-The Default Admin API Key can do anything except manage keys. In production, give Drupal a key limited to what the module needs: `search`, `documents.*`, `indexes.*`, `settings.*`, `tasks.get` and `version`.
+The Default Admin API Key can do anything except manage keys. In production, give Drupal a key limited to what the module needs: `search`, `documents.*`, `indexes.*`, `settings.*`, `stats.get`, `tasks.get` and `version`.
 
 Create it with the Meilisearch API, authenticated with your project's master key:
 
@@ -64,13 +64,15 @@ curl -X POST 'https://ms-1a2b3c4d5e6f-1234.fra.meilisearch.io/keys' \
   -H 'Content-Type: application/json' \
   --data-binary '{
     "description": "Drupal",
-    "actions": ["search", "documents.*", "indexes.*", "settings.*", "tasks.get", "version"],
+    "actions": ["search", "documents.*", "indexes.*", "settings.*", "stats.get", "tasks.get", "version"],
     "indexes": ["*"],
     "expiresAt": null
   }'
 ```
 
 The `key` field of the response is the API key for Drupal. With an index prefix you can limit the key to it, for example `"indexes": ["prod_*"]`.
+
+The actions of a key cannot be edited after it is created. If Drupal uses a key made without `stats.get`, which the server page needs to show the number of documents in each index, create a new key with the list above, give it to Drupal, then delete the old one.
 
 ## Several environments on one project
 
@@ -84,7 +86,7 @@ To let an environment search production's data without writing to it, use produc
 
 ## Relevancy settings
 
-The module manages which attributes are searchable, filterable and sortable. Synonyms, stop words, typo tolerance, ranking rules and embedders stay in Meilisearch: edit them in the Cloud dashboard, which the server edit form links to.
+The module manages which attributes are searchable, filterable and sortable, and keeps every attribute displayed: it needs `search_api_id` and the highlighted fields returned, so a `displayedAttributes` restriction made in the dashboard is reset the next time it sends settings (see [What the module manages](/guides/configuration#what-the-module-manages)). Synonyms, stop words, typo tolerance, ranking rules and embedders stay in Meilisearch: edit them in the Cloud dashboard, which the server edit form links to. The module only sets the ranking rules of an index it creates, or of an existing one that is empty and still has the default rules (see [What the module manages](/guides/configuration#what-the-module-manages)).
 
 Cloud also enables [click analytics](/guides/analytics) and [semantic search](/guides/semantic-search).
 
@@ -94,6 +96,7 @@ Cloud also enables [click analytics](/guides/analytics) and [semantic search](/g
 |---|---|
 | *Could not connect to Meilisearch* with a timeout or DNS error | Copy the project URL exactly, without `:7700` or a trailing path. Check that your hosting allows outgoing HTTPS requests. |
 | *The provided API key is invalid* | The key was mistyped, deleted or has expired. Copy it again from **Settings → API Keys**. |
+| The server page shows **Connected**, but *The provided API key is invalid* next to each index | The key works but lacks the `stats.get` action. Actions cannot be added to a key: replace it with one created as in [A dedicated key](#a-dedicated-key). |
 | Indexing fails with a permission error | The key lacks an action, often because it is the Default Search API Key. Use a key with the actions in [A dedicated key](#a-dedicated-key). |
 | The URL or key field is greyed out | It is set in `settings.php`: change it there. |
 | The server page shows *not created yet* for an index | Click **Start indexing now** on the index: the module creates missing indexes when it indexes. |

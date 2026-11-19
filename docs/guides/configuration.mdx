@@ -5,7 +5,7 @@ title: Server configuration
 | Setting | Description |
 |---|---|
 | Meilisearch URL | Full URL including the port, for example `http://127.0.0.1:7700` or `https://ms-abc123.fra.meilisearch.io`. |
-| API key | See below. Leave empty when editing to keep the stored key. |
+| API key | See below. Leave empty when editing to keep the stored key. A new URL with another scheme, host or port needs the key again; a new path does not. |
 | Index prefix | Prepended to Meilisearch index names (`prod_`, `staging_`) so several sites or environments can share an instance. Changing it requires re-indexing. |
 | Search mode | Keyword, hybrid or semantic. See [Semantic search](/guides/semantic-search). |
 | Matching strategy | How many query words must match: `last` (Meilisearch default), `all` or `frequency`. |
@@ -13,15 +13,18 @@ title: Server configuration
 
 ## API key
 
-Create a dedicated key with these actions: `search`, `documents.*`, `indexes.*`, `settings.*`, `tasks.get`, `version`. Avoid the master key.
+Create a dedicated key with these actions: `search`, `documents.*`, `indexes.*`, `settings.*`, `stats.get`, `tasks.get`, `version`. Avoid the master key.
 
-To keep the key out of configuration exports, set it in `settings.php`:
+`stats.get` is what lets the server page show the number of documents in each index. Without it, indexing and search work but the page shows *The provided API key is invalid* next to every index. The actions of a Meilisearch key cannot be edited after it is created, so a key that lacks one has to be replaced: create a new key with the full list, give it to Drupal, then delete the old one.
+
+To keep the key out of configuration exports, set it in `settings.php`, and set the URL there too:
 
 ```php
+$config['search_api.server.SERVER_ID']['backend_config']['url'] = getenv('MEILISEARCH_URL');
 $config['search_api.server.SERVER_ID']['backend_config']['api_key'] = getenv('MEILISEARCH_API_KEY');
 ```
 
-The same works for the URL, so each environment points at its own instance.
+This also lets each environment point at its own instance. Override both: with only the key in `settings.php`, the URL stays editable in the form and the module sends the key to whatever URL is saved there, as it cannot ask for a key it does not store. A key stored in configuration is protected instead: when the URL's scheme, host or port changes, the form asks for the key again rather than send the stored one to the new host.
 
 ## Changing the connection
 
@@ -31,7 +34,9 @@ Read-only indexes are never created and their settings never changed: use them t
 
 ## What the module manages
 
-On every index save the module sends the searchable, filterable and sortable attributes, `pagination.maxTotalHits`, and faceting settings (1,000 values per facet, ranked by count). When it creates an index it also puts the `sort` ranking rule first, so explicit sorts are strict. It never touches synonyms, stop words, typo tolerance or embedders, nor the ranking rules of existing indexes.
+On every index save the module sends the searchable, filterable, sortable and displayed attributes, `pagination.maxTotalHits`, and faceting settings (1,000 values per facet, ranked by count). When it creates an index it also puts the `sort` ranking rule first, so explicit sorts are strict. It never touches synonyms, stop words, typo tolerance or embedders, nor the ranking rules of existing indexes, with one exception: when it sets up an index that already exists, has no documents and still has the Meilisearch server's default ranking rules (as a setup that failed after creating the index leaves it), it puts `sort` first as for a new index. Meilisearch has no route that returns its default rules, so to read them the module creates an empty scratch index named after the index, `INDEX_UID__defaults_` followed by random characters, and deletes it straight away. A key limited to the index prefix (`"indexes": ["prod_*"]`) can do this; with a key limited to exact index names the check fails, the rules are left unchanged and a warning is logged. An index that has documents, or ranking rules changed in Meilisearch, is never touched, and indexes the module just created are not checked at all.
+
+The displayed attributes are always set to all of them (`displayedAttributes: ["*"]`), because the module needs `search_api_id` returned to load results and the highlighted fields returned to build excerpts. A restriction set by hand in Meilisearch is therefore reset the next time the module sends settings: on an index save, and when the server's maximum number of results, URL, key or index prefix changes. To expose only some fields to another client, give it an index of its own rather than restricting this one.
 
 ## Discouraged processors
 
